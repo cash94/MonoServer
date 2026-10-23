@@ -1,0 +1,21 @@
+<!--
+  Проверка службы на ПК: те же исходники, что в пакете для Tizen, без Program.cs
+  (обвязки Tizen). Запуск: dotnet run, аргументы — порт и каталог данных (pc/Main.cs)
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>TorrServerPc</AssemblyName>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="../*.cs" Exclude="../Program.cs" />
+    <PackageReference Include="MonoTorrent" Version="3.0.2" />
+  </ItemGroup>
+
+</Project>

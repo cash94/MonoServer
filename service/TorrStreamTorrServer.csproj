@@ -1,0 +1,39 @@
+<!--
+  TorrServer на C# для Samsung Tizen 5.5 (MonoTorrent) — .NET-часть пакета
+  TorrServer-Tizen.wgt. Сборка: python tools/build.py
+  (гибрид, как служба ffprobe). Проверка на ПК — pc/ (net8.0, те же исходники).
+-->
+<Project Sdk="Tizen.NET.Sdk/1.1.6">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>tizen40</TargetFramework>
+    <AssemblyName>TorrStreamTorrServer</AssemblyName>
+    <LangVersion>8.0</LangVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>None</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- netstandard2.0: Tizen 5.5 — .NET Core 3.x, сборка tizen40 -->
+    <PackageReference Include="MonoTorrent" Version="3.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- res/THIRD-PARTY-NOTICES.txt — лицензия MonoTorrent, едет в пакете -->
+    <TizenTpkUserIncludeFiles Include="res\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="pc\**" />
+    <None Remove="pc\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <TizenTpkUserExcludeFiles Include="TorrStreamTorrServer.deps.json" />
+    <TizenTpkUserExcludeFiles Include="bin/TorrStreamTorrServer.pdb" />
+  </ItemGroup>
+
+</Project>

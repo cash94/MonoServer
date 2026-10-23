@@ -1,0 +1,5 @@
+dist/
+service/bin/
+service/obj/
+service/pc/bin/
+service/pc/obj/

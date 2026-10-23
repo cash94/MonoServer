@@ -1,0 +1,103 @@
+# TorrServer для Samsung Tizen
+
+TorrServer прямо на телевизоре Samsung — служба на C# с API
+[TorrServer](https://github.com/YouROK/TorrServer) MatriX на порту 8090.
+[TorrStream](https://github.com/cash94/TorrStream-Tizen), Lampa и другие
+клиенты видят её как обычный TorrServer.
+
+Зачем своя: на **Tizen 5.5** службе телевизора нельзя запустить ни одну программу
+и загрузить свою `.so` (и файлом, и из памяти — «Operation not permitted»,
+«failed to map segment»), поэтому официальный TorrServer (Go) там не работает.
+Управляемый код .NET — работает. На Tizen 6 и новее эта служба — альтернатива
+[no-cover/torr-streaming](https://github.com/no-cover/torr-streaming): обе
+занимают порт 8090, ставьте одну.
+
+Та же служба есть и для Linux (x64, arm64) — без установки .NET.
+
+## Установка на телевизор
+
+Файл — `TorrServer-Tizen.wgt` из [релизов](../../releases/latest). Пакет без
+подписи: подписывает тот, кто ставит, своим сертификатом Samsung (он привязан к
+DUID телевизора).
+
+1. На ТВ: Apps → набрать на пульте `12345` → Developer Mode **On**, Host PC IP —
+   адрес компьютера, перезагрузить телевизор.
+2. **Apps2Samsung** ([Jellyfin2Samsung](https://github.com/Jellyfin2Samsung/Samsung-Jellyfin-Installer)):
+   «Custom WGT» → `TorrServer-Tizen.wgt`. Программа сама войдёт в учётную
+   запись Samsung, выпустит сертификат под телевизор и подпишет пакет.
+3. Или **Tizen Studio**: Certificate Manager → профиль Samsung (DUID
+   телевизора), `sdb connect <IP>` → `tizen install -n TorrServer-Tizen.wgt -t <устройство>`.
+
+Служба запускается вместе с телевизором. Значок «TorrStream TorrServer» — её
+запуск вручную и состояние: адрес, версия, движок. В TorrStream: Настройки →
+TorrServer → «Использовать TorrServer, установленный на этом устройстве» —
+адрес (IP телевизора, порт 8090) подставится сам; «Об устройстве» → «TorrServer на ТВ».
+
+Ставилась версия под именем `TorrStream-TorrServer.wgt` (до 1.0.9) — новая
+ставится поверх: id пакета тот же (`TorrServr1.TorrServer`).
+
+## Linux
+
+```
+tar xzf TorrServer-linux-x64.tar.gz
+./TorrServer 8090 ~/ts-mono
+```
+
+Аргументы — HTTP-порт и каталог данных (база торрентов, настройки, кэш DHT и
+метаданных); по умолчанию 8090 и временный каталог. Для Raspberry Pi и других
+ARM — `TorrServer-linux-arm64.tar.gz` (64-битная система). Порт для пиров
+случайный, он записан в `settings.json` (`PeersListenPort`) — откройте его в
+брандмауэре, если нужны входящие соединения.
+
+## Как устроено
+
+`service/` — .NET-служба `online.torrstream.torrserver`:
+
+- `TorrEngine.cs` — [MonoTorrent](https://github.com/alanmcgovern/monotorrent)
+  3.0.2 (MIT, чистый C#, сборка netstandard2.0). Торренты по magnet, хэшу или
+  ссылке на `.torrent`; база — `db.json`, метаданные — кэш MonoTorrent,
+  настройки — `settings.json`. Без читателей `TorrentDisconnectTimeout` секунд —
+  торрент закрывается, как у TorrServer (после предзагрузки — не раньше чем через 2 минуты).
+  Каждый трекер — отдельным уровнем (tier): MonoTorrent иначе спрашивает
+  трекеры magnet по очереди до первого ответившего, даже если тот пиров не знает.
+- `MemoryStorage.cs` — куски только в памяти (`CacheSize`, по умолчанию 64 МБ
+  на торрент), на флеш телевизора ничего не пишется. Места не хватает —
+  вытесняется давно не нужный кусок вне окна читателей, и его бит в bitfield
+  MonoTorrent снимается (через внутреннее свойство — `/version` → `evict`),
+  чтобы при перемотке назад кусок скачался снова.
+- `WindowRequester.cs` — переделка StreamingPieceRequester из MonoTorrent:
+  качается только окно у читателей (`ReaderReadAHead` % кэша вперёд), по
+  порядку от позиции; очередь запросов у пира — сколько он тянет; куски вне
+  окна (allowed fast, suggested) не берутся.
+- `PeerConnector.cs` — подключение к пирам асинхронно, с таймаутом 8 с. В
+  netstandard2.0-сборке MonoTorrent оно блокирующее, и на Tizen попытки к
+  недоступным пирам висели по 2 минуты — новых подключений не было.
+- `HttpApi.cs` — `/echo` (`MatriX.136 (TorrStream …)`), `/torrents`
+  (add/get/set/rem/list/drop/wipe), `/stream?link=…&index=N&play|stat|m3u|preload`,
+  `/play/<хэш>/<N>`, `/cache`, `/settings` (имена BTSets), `/download/<МБ>`;
+  файлы — с Range, HEAD, keep-alive; CORS и Private Network Access. Служебное:
+  `/version` (JSON), `/log` (журнал: сводка по пирам, трекерам и DHT, кто что
+  читает), `/` — страница с торрентами; открываются и с телефона:
+  `http://<IP телевизора>:8090/`.
+- `Program.cs` — обвязка Tizen, `Host.cs` — служба целиком (её же запускает `pc/`).
+
+`app/` — страница пакета (запуск службы, состояние). `tools/make_icon.py` — значок.
+
+Не сделано: `/ffp` (ffprobe TorrServer), `/viewed` (отвечает пустым списком),
+пароль, кэш на диске. DHT на Tizen 5.5 не поднимается (0 узлов) — пиры идут от
+трекеров и PEX. Пиру, который просит уже вытесненный кусок, MonoTorrent отдаёт не
+те данные (он не проверяет, есть ли кусок); пир отбросит их по хэшу.
+
+## Сборка
+
+```
+python tools/build.py [--version 1.0.9] [--linux]
+```
+
+Нужен .NET SDK 8+ (Tizen.NET.Sdk и MonoTorrent скачаются сами). Результат — в
+`dist/`. Проверка без телевизора: `cd service/pc && dotnet run -c Release -- 18090`.
+
+Тег `v*` → workflow `build.yml`: версия из тега → `tools/build.py --linux` →
+релиз с `TorrServer-Tizen.wgt` и `TorrServer-linux-*.tar.gz`.
+
+Сторонний код и лицензии — `service/res/THIRD-PARTY-NOTICES.txt` (MonoTorrent, MIT).

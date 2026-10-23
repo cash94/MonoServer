@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TorrStream TorrServer: отдельный пакет со службой TorrServer на C#
+  (service/, MonoTorrent) для Tizen 5.5, где официальный TorrServer
+  не запускается: служба там не может исполнить ни одну программу. API — как у
+  TorrServer MatriX на :8090, TorrStream находит её сам (torrents.js:
+  TizenTorrServer), по IP телевизора.
+  Эта страница — только запуск службы и её состояние (index.html).
+  Собирается гибридом: tools/build.py (страница + .NET-служба).
+  Два дефиса подряд в XML-комментарии запрещены: установщик Tizen такой
+  config.xml не читает («Could not read xml entry»).
+  Профиль «tv» и привилегии службы в корневом config.xml добавляет build.py.
+-->
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
+        id="http://torrstream.online/tizen-torrserver" version="1.0.9" viewmodes="maximized">
+    <tizen:application id="TorrServr1.TorrServer" package="TorrServr1" required_version="2.3"/>
+    <tizen:profile name="tv"/>
+    <name>TorrStream TorrServer</name>
+    <description>TorrServer для TorrStream прямо на телевизоре (Tizen 5.5 и новее)</description>
+    <author href="https://github.com/cash94">TorrStream</author>
+    <icon src="icon.png"/>
+    <content src="index.html"/>
+    <feature name="http://tizen.org/feature/screen.size.all"/>
+
+    <access origin="*" subdomains="true"/>
+
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+    <tizen:privilege name="http://tizen.org/privilege/application.launch"/>
+    <tizen:privilege name="http://tizen.org/privilege/application.info"/>
+    <tizen:privilege name="http://developer.samsung.com/privilege/network.public"/>
+
+    <tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable"
+                   encryption="disable" install-location="auto" hwkey-event="enable"/>
+</widget>

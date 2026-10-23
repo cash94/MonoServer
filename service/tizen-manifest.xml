@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TorrServer на C# для TorrStream (Tizen TV, прежде всего 5.5, где официальный
+  TorrServer не запускается). Стартует вместе с телевизором (on-boot,
+  launch_on_event), её же будит страница пакета (tizen.application.launch), и
+  живёт в фоне: API TorrServer на :8090 всех адресов телевизора.
+  Собирается гибридом в TorrServer-Tizen.wgt (tools/build.py): package при сборке заменяется на package веб-приложения.
+  Метаданные — как у службы ffprobe (проверены на Tizen 5.5 и 9). Программы
+  служба не запускает, поэтому exec.bin, fork и process.* не нужны.
+-->
+<manifest xmlns="http://tizen.org/ns/packages" api-version="4.0" package="online.torrstream.torrserver" version="1.0.9">
+    <profile name="tv" />
+    <service-application appid="online.torrstream.torrserver" exec="TorrStreamTorrServer.dll" multiple="false" nodisplay="false" taskmanage="false" on-boot="true" type="dotnet" launch_mode="caller">
+        <label>TorrStream TorrServer</label>
+        <icon>icon.png</icon>
+        <metadata key="http://samsung.com/tv/metadata/background.execution.support" value="true"/>
+        <metadata key="http://developer.samsung.com/tizen/metadata/allow-on-boot"/>
+        <metadata key="http://samsung.com/tv/metadata/display.hidden" value="false"/>
+        <metadata key="http://samsung.com/tv/metadata/prelaunch.support" value="NotSupportSuspendDelay"/>
+        <metadata key="http://samsung.com/tv/metadata/application/watchdog.set" value="16,240"/>
+        <metadata key="http://tizen.org/metadata/prefer_dotnet_aot" value="true"/>
+        <metadata key="http://samsung.com/tv/metadata/application/read.metadata.from.hybrid.webapp"/>
+        <background-category value="background-network"/>
+        <app-control>
+            <operation name="http://tizen.org/appcontrol/operation/launch_on_event"/>
+            <uri name="file:///tmp/firstscreen_done"/>
+        </app-control>
+    </service-application>
+    <privileges>
+        <privilege>http://tizen.org/privilege/internet</privilege>
+        <privilege>http://tizen.org/privilege/network.get</privilege>
+        <!-- уведомление на экране при ошибке запуска (org.tizen.alert-syspopup) -->
+        <privilege>http://tizen.org/privilege/appmanager.launch</privilege>
+    </privileges>
+</manifest>

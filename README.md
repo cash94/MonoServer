@@ -82,6 +82,29 @@ ARM — `TorrServer-linux-arm64.tar.gz` (64-битная система). Пор
 случайный, он записан в `settings.json` (`PeersListenPort`) — откройте его в
 брандмауэре, если нужны входящие соединения.
 
+## Windows
+
+`TorrServer-windows-x64.zip` (или `-arm64`) из [релизов](../../releases/latest) —
+.NET ставить не нужно. Распакуйте и запустите `torrserver.cmd`: спросит порт
+(Enter — 8090), проверит, свободен ли (занят — скажет кем), и запустит службу.
+
+| Команда | Что делает |
+|---|---|
+| `torrserver.cmd` | запустить в окне (закрыть окно — стоп) |
+| `torrserver.cmd 8091` | то же без вопроса о порте |
+| `torrserver.cmd install` | автозапуск при входе в Windows (окно свёрнуто) и запуск сейчас |
+| `torrserver.cmd uninstall` | убрать автозапуск |
+
+Данные — `%LOCALAPPDATA%\torrserver-tizen`. Брандмауэр Windows при первом
+запуске спросит разрешение для сети — разрешите для частных сетей, иначе
+телевизор и телефон до службы не достучатся.
+
+Android: эта служба там не нужна — оригинальный
+[TorrServer](https://github.com/YouROK/TorrServer) запускается на Android и
+Android TV (arm64 и armv7) штатно. Сборку .NET под Android (`linux-bionic`)
+Microsoft выпускает только для arm64, и ей нужен системный OpenSSL для
+проверки хэшей, которого у обычного приложения Android нет.
+
 ## Как устроено
 
 `service/` — .NET-служба `online.torrstream.torrserver`:

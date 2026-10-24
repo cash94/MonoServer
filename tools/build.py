@@ -1,7 +1,7 @@
 """
 Сборка TorrServer для Samsung Tizen и Linux.
 
-  python tools/build.py [--version 1.0.9] [--out dist] [--linux]
+  python tools/build.py [--version 1.0.9] [--out dist] [--linux] [--windows]
 
 TorrServer-Tizen.wgt — гибрид, как TorrServer от no-cover/torr-streaming и
 службы TorrStream-Tizen: страница app/ (запуск службы и её состояние) и
@@ -137,11 +137,30 @@ def build_linux(version, out, work):
         print('==', target)
 
 
+def build_windows(version, out, work):
+    """Windows (x64, arm64): TorrServer.exe с .NET внутри и torrserver.cmd — zip"""
+    for rid, name in (('win-x64', 'windows-x64'), ('win-arm64', 'windows-arm64')):
+        pub = os.path.join(work, rid)
+        subprocess.check_call(['dotnet', 'publish', os.path.join(SERVICE, 'pc'), '-c', 'Release', '-r', rid,
+                               '--self-contained', 'true', '-p:PublishSingleFile=true',
+                               '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=None',
+                               '-nologo', '-v', 'q', '-o', pub])
+        base = 'TorrServer-' + name
+        target = os.path.join(out, '%s_%s.zip' % (base, version))
+        with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.write(os.path.join(pub, 'TorrServerPc.exe'), 'TorrServer.exe')
+            z.write(os.path.join(ROOT, 'windows', 'torrserver.cmd'), 'torrserver.cmd')
+            z.write(os.path.join(SERVICE, 'res', 'THIRD-PARTY-NOTICES.txt'), 'THIRD-PARTY-NOTICES.txt')
+        shutil.copyfile(target, os.path.join(out, base + '.zip'))
+        print('==', target)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--version', help='версия x.y.z (по умолчанию из app/config.xml)')
     ap.add_argument('--out', default=os.path.join(ROOT, 'dist'))
     ap.add_argument('--linux', action='store_true', help='ещё архивы для Linux (x64, arm64)')
+    ap.add_argument('--windows', action='store_true', help='ещё архивы для Windows (x64, arm64)')
     args = ap.parse_args()
     if args.version and not re.match(r'^\d+\.\d+\.\d+$', args.version):
         raise SystemExit('версия должна быть вида 1.0.9: ' + args.version)
@@ -151,6 +170,8 @@ def main():
         version = build_wgt(args.version, args.out, work)
         if args.linux:
             build_linux(version, args.out, work)
+        if args.windows:
+            build_windows(version, args.out, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

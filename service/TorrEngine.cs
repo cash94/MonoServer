@@ -66,6 +66,8 @@ namespace TorrStreamTorrServer
         public volatile ReadWindow Window = ReadWindow.None;
         // Замена медленных пиров (PeerRotation.cs)
         public readonly PeerRotation Rotation = new PeerRotation();
+        // Свой запас адресов (PeerPool.cs)
+        public readonly PeerPool Pool = new PeerPool();
 
         public bool Active => Manager != null;
         public bool HasInfo => Files.Count > 0;
@@ -207,6 +209,8 @@ namespace TorrStreamTorrServer
             trackers = new TrackerList(Path.Combine(dataDir, "trackers_best_ip.txt"), log);
             if (Settings.RetrackersMode == 1) trackers.RefreshInBackground();
             dhtBoot = new DhtBootstrap(cacheDir, log);
+            // Адреса от DHT — и в запас торрента: MonoTorrent берёт из них не больше своего потолка
+            dhtBoot.PeersFound = (ih, peers) => Get(ih.ToHex())?.Pool.Add(peers);
             if (Settings.EnableDHT) dhtBoot.ResolveInBackground();
             if (!CanForgetPieces) log("внимание: внутренности MonoTorrent не найдены — вытесненные куски не перекачаются");
             try
@@ -561,11 +565,13 @@ namespace TorrStreamTorrServer
                     m.ConnectionAttemptFailed += (s, a) =>
                     {
                         lock (d) { d.Fails.TryGetValue(a.Reason.ToString(), out int n); d.Fails[a.Reason.ToString()] = n + 1; }
+                        e.Pool.MarkTried(a.Peer?.ConnectionUri);
                     };
+                    m.PeerConnected += (s, a) => e.Pool.MarkTried(a.Peer?.Uri);
                     m.TrackerManager.AnnounceComplete += (s, a) =>
                     {
                         int peers = 0;
-                        if (a.Peers != null) foreach (var l in a.Peers.Values) peers += l.Count;
+                        if (a.Peers != null) foreach (var l in a.Peers.Values) { peers += l.Count; e.Pool.Add(l); }
                         lock (d) d.Trackers[a.Tracker.Uri.Host] = a.Successful ? "ок, пиров " + peers : "нет (" + a.Tracker.Status + ")";
                     };
                     m.TorrentStateChanged += (s, a) =>
@@ -924,6 +930,7 @@ namespace TorrStreamTorrServer
             {
                 string r = kv.Key.Rotation.Tick(engine, kv.Key.Manager, Settings.ConnectionsLimit, kv.Value, now);
                 if (r != null) log(kv.Key.Hash + ": " + r);
+                try { kv.Key.Pool.Tick(kv.Key.Manager); } catch (Exception ex) { log(kv.Key.Hash + ": запас пиров — " + ex.Message); }
             }
             foreach (var kv in idle)
             {
@@ -963,6 +970,7 @@ namespace TorrStreamTorrServer
                 sb.Append(" · найдено пиров: трекеры ").Append(d.Tracker).Append(", DHT ").Append(d.Dht)
                   .Append(", PEX ").Append(d.Pex).Append(", сеть ").Append(d.Lpd);
                 sb.Append(" · подключено ").Append(m.OpenConnections).Append(", подключаются ").Append(Connecting(m)).Append(", ждут ").Append(m.Peers.Available)
+                  .Append(", в запасе службы ").Append(e.Pool.Extra).Append(" (подложено ").Append(e.Pool.Fed).Append(')')
                   .Append(", сидов ").Append(m.Peers.Seeds);
                 if (d.Fails.Count > 0)
                     sb.Append(" · не подключились: ").Append(string.Join(", ", d.Fails.Select(kv => kv.Key + " " + kv.Value)));
@@ -1183,7 +1191,8 @@ namespace TorrStreamTorrServer
                     w.Prop("loaded_size", filled)
                         .Prop("preloaded_bytes", buffered).Prop("preload_size", bufferSize)
                         .Prop("download_speed", (double)m.Monitor.DownloadRate).Prop("upload_speed", (double)m.Monitor.UploadRate)
-                        .Prop("total_peers", m.Peers.Available + Connecting(m) + m.OpenConnections).Prop("pending_peers", m.Peers.Available)
+                        // Ждут — очередь MonoTorrent и свой запас (PeerPool), как pending у anacrolix
+                        .Prop("total_peers", m.Peers.Available + e.Pool.Extra + Connecting(m) + m.OpenConnections).Prop("pending_peers", m.Peers.Available + e.Pool.Extra)
                         .Prop("active_peers", m.OpenConnections).Prop("connected_seeders", m.Peers.Seeds)
                         .Prop("half_open_peers", Connecting(m))
                         .Prop("bytes_written", m.Monitor.DataBytesSent).Prop("bytes_read", m.Monitor.DataBytesReceived)
@@ -1321,6 +1330,7 @@ namespace TorrStreamTorrServer
             lock (d)
             {
                 w.Prop("Rotated", e.Rotation.Rotated).Prop("RotationSupported", PeerRotation.Supported);
+                w.Prop("PoolKnown", e.Pool.Known).Prop("PoolExtra", e.Pool.Extra).Prop("PoolFed", e.Pool.Fed);
                 w.Key("Found").Obj().Prop("tracker", d.Tracker).Prop("dht", d.Dht).Prop("pex", d.Pex).Prop("lpd", d.Lpd).EndObj();
                 w.Key("Fails").Obj();
                 foreach (var kv in d.Fails) w.Prop(kv.Key, kv.Value);

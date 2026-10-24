@@ -56,9 +56,13 @@ namespace TorrStreamTorrServer
             this.log = log ?? (_ => { });
         }
 
+        /// <summary>Адреса пиров, найденные DHT (в запас торрента — PeerPool)</summary>
+        public Action<MonoTorrent.InfoHash, IList<MonoTorrent.PeerInfo>> PeersFound;
+
         public IDhtEngine Create()
         {
             Engine = new DhtEngine();
+            Engine.PeersFound += (s, a) => { try { PeersFound?.Invoke(a.InfoHash, a.Peers); } catch { } };
             return Engine;
         }
 

@@ -441,7 +441,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       (c.Diag && c.Diag.Error ? '<div class="err-text">' + esc(c.Diag.Error) + '</div>' : '') +
       '<div class="stats">' +
         stat('Скорость', '↓ ' + speed(t.download_speed) + ' · ↑ ' + speed(t.upload_speed)) +
-        stat('Пиры', (t.active_peers || 0) + ' подключено · ' + (t.pending_peers || 0) + ' ждут · сидов ' + (t.connected_seeders || 0)) +
+        stat('Пиры', (t.active_peers || 0) + ' подключено · ' + (t.half_open_peers || 0) + ' подключаются · ' + (t.pending_peers || 0) + ' ждут · сидов ' + (t.connected_seeders || 0)) +
         stat('Кэш', bytes(c.Filled) + ' из ' + bytes(c.Capacity) + ' (' + pct(c.Filled, c.Capacity).toFixed(0) + '%)') +
         stat('Кусков в памяти', completed + ' готово · ' + partial + ' качается') +
         stat('Кусок', bytes(pl) + ' · всего ' + c.PiecesCount) +

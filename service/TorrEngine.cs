@@ -133,6 +133,17 @@ namespace TorrStreamTorrServer
         static readonly PropertyInfo MutableBitFieldProp = typeof(TorrentManager).GetProperty("MutableBitField", BindingFlags.Instance | BindingFlags.NonPublic);
         static readonly SynchronizationContext MainLoop = typeof(ClientEngine).GetField("MainLoop", BindingFlags.Static | BindingFlags.NonPublic)?.GetValue(null) as SynchronizationContext;
         static readonly PropertyInfo InfoMetadataProp = typeof(Torrent).GetProperty("InfoMetadata", BindingFlags.Instance | BindingFlags.NonPublic);
+        // Пиры, к которым идёт подключение (PeerManager.ConnectingToPeers — внутреннее).
+        // Без них «всего» в плеере (active / total) скакало: попытки (до 48 сразу)
+        // выпадали из счёта, неудачные MonoTorrent выбрасывает, ответы трекеров и
+        // PEX список снова пополняют. У TorrServer (anacrolix) total — с ними
+        static readonly FieldInfo ConnectingField = typeof(PeerManager).GetField("ConnectingToPeers", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static int Connecting(TorrentManager m)
+        {
+            try { return ConnectingField?.GetValue(m.Peers) is System.Collections.ICollection c ? c.Count : 0; }
+            catch { return 0; }
+        }
         const long PreloadKeepMs = 120000;
         public static bool CanForgetPieces => MutableBitFieldProp != null && MainLoop != null;
 
@@ -924,7 +935,7 @@ namespace TorrStreamTorrServer
             {
                 sb.Append(" · найдено пиров: трекеры ").Append(d.Tracker).Append(", DHT ").Append(d.Dht)
                   .Append(", PEX ").Append(d.Pex).Append(", сеть ").Append(d.Lpd);
-                sb.Append(" · подключено ").Append(m.OpenConnections).Append(", ждут ").Append(m.Peers.Available)
+                sb.Append(" · подключено ").Append(m.OpenConnections).Append(", подключаются ").Append(Connecting(m)).Append(", ждут ").Append(m.Peers.Available)
                   .Append(", сидов ").Append(m.Peers.Seeds);
                 if (d.Fails.Count > 0)
                     sb.Append(" · не подключились: ").Append(string.Join(", ", d.Fails.Select(kv => kv.Key + " " + kv.Value)));
@@ -1135,9 +1146,9 @@ namespace TorrStreamTorrServer
                     w.Prop("loaded_size", filled)
                         .Prop("preloaded_bytes", buffered).Prop("preload_size", bufferSize)
                         .Prop("download_speed", (double)m.Monitor.DownloadRate).Prop("upload_speed", (double)m.Monitor.UploadRate)
-                        .Prop("total_peers", m.Peers.Available + m.OpenConnections).Prop("pending_peers", m.Peers.Available)
+                        .Prop("total_peers", m.Peers.Available + Connecting(m) + m.OpenConnections).Prop("pending_peers", m.Peers.Available)
                         .Prop("active_peers", m.OpenConnections).Prop("connected_seeders", m.Peers.Seeds)
-                        .Prop("half_open_peers", 0)
+                        .Prop("half_open_peers", Connecting(m))
                         .Prop("bytes_written", m.Monitor.DataBytesSent).Prop("bytes_read", m.Monitor.DataBytesReceived)
                         .Prop("bytes_read_data", m.Monitor.DataBytesReceived).Prop("bytes_read_useful_data", m.Monitor.DataBytesReceived);
                 }

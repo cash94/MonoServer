@@ -21,6 +21,10 @@ namespace TorrStreamTorrServer
         public int DownloadRateLimit;           // КБ/с, 0 — без ограничения
         public int UploadRateLimit;
         public int RetrackersMode = 1;          // 1 — добавлять ретрекеры к magnet
+        // Как у TorrServer (по умолчанию включено): плееру — скачанные подряд блоки
+        // куска, не дожидаясь проверки хэша всего куска. Иначе при кусках по 8 МБ
+        // плеер секундами не получал ни байта и обрывал запрос
+        public bool ResponsiveMode = true;
 
         // Нижние границы: 0 и меньше на телевизоре сломали бы окно читателя
         public const long MinCache = 8L << 20;
@@ -28,7 +32,7 @@ namespace TorrStreamTorrServer
 
         // Версия набора умолчаний: settings.json пишется целиком (порт пиров при
         // первом запуске), и старое умолчание там не отличить от выбранного
-        const int SettingsVersion = 2;
+        const int SettingsVersion = 3;
 
         Dictionary<string, object> extra = new Dictionary<string, object>();
 
@@ -43,6 +47,8 @@ namespace TorrStreamTorrServer
                     s.Apply(o);
                     // 1.0.0–1.0.1: ConnectionsLimit по умолчанию был 25
                     if ((o.Num("TorrStreamSettingsVersion") ?? 1) < 2 && s.ConnectionsLimit == 25) s.ConnectionsLimit = 50;
+                    // до 1.0.11 ResponsiveMode не было — false мог прийти от клиента и лежать без дела
+                    if ((o.Num("TorrStreamSettingsVersion") ?? 1) < 3) s.ResponsiveMode = true;
                 }
             }
             catch { }
@@ -75,6 +81,7 @@ namespace TorrStreamTorrServer
                     case "DownloadRateLimit": DownloadRateLimit = (int)Clamp(o.Num(kv.Key) ?? 0, 0, int.MaxValue / 1024); break;
                     case "UploadRateLimit": UploadRateLimit = (int)Clamp(o.Num(kv.Key) ?? 0, 0, int.MaxValue / 1024); break;
                     case "RetrackersMode": RetrackersMode = (int)Clamp(o.Num(kv.Key) ?? RetrackersMode, 0, 3); break;
+                    case "ResponsiveMode": ResponsiveMode = o.Bool(kv.Key) ?? ResponsiveMode; break;
                     case "TorrStreamSettingsVersion": break;
                     default: extra[kv.Key] = kv.Value; break;
                 }
@@ -97,6 +104,7 @@ namespace TorrStreamTorrServer
                 .Prop("DownloadRateLimit", DownloadRateLimit)
                 .Prop("UploadRateLimit", UploadRateLimit)
                 .Prop("RetrackersMode", RetrackersMode)
+                .Prop("ResponsiveMode", ResponsiveMode)
                 // Кэш у нас всегда в памяти — на диск не пишем
                 .Prop("UseDisk", false)
                 .Prop("TorrStreamSettingsVersion", SettingsVersion);

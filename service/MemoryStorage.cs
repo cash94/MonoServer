@@ -30,6 +30,74 @@ namespace TorrStreamTorrServer
             public bool Verified;
             public long Touched;     // Now() последнего обращения, мс
             public int Written;      // байт записано — сколько скачано (для /cache)
+            public Coverage Got;     // какие байты куска уже пришли (ResponsiveMode)
+        }
+
+        /// <summary>
+        /// Какие байты куска записаны: блоки по 16 КБ целиком, а блок на стыке
+        /// файлов MonoTorrent пишет двумя частями — для них отрезки. Повторно
+        /// присланный блок не считается дважды
+        /// </summary>
+        sealed class Coverage
+        {
+            const int Block = 16384;
+            readonly int size;
+            readonly bool[] full;
+            readonly Dictionary<int, List<int[]>> part = new Dictionary<int, List<int[]>>();
+
+            public Coverage(int size)
+            {
+                this.size = size;
+                full = new bool[(size + Block - 1) / Block];
+            }
+
+            int BlockLen(int b) { return Math.Min(Block, size - b * Block); }
+
+            public void Mark(int off, int len)
+            {
+                int end = Math.Min(size, off + len);
+                while (off < end)
+                {
+                    int b = off / Block, bs = b * Block, blen = BlockLen(b);
+                    int st = off - bs, en = Math.Min(end - bs, blen);
+                    if (!full[b])
+                    {
+                        if (st == 0 && en == blen) { full[b] = true; part.Remove(b); }
+                        else
+                        {
+                            if (!part.TryGetValue(b, out var iv)) part[b] = iv = new List<int[]>();
+                            iv.Add(new[] { st, en });
+                            iv.Sort((x, y) => x[0].CompareTo(y[0]));
+                            var merged = new List<int[]>();
+                            foreach (var x in iv)
+                            {
+                                if (merged.Count > 0 && x[0] <= merged[merged.Count - 1][1])
+                                    merged[merged.Count - 1][1] = Math.Max(merged[merged.Count - 1][1], x[1]);
+                                else merged.Add(new[] { x[0], x[1] });
+                            }
+                            if (merged.Count == 1 && merged[0][0] == 0 && merged[0][1] >= blen) { full[b] = true; part.Remove(b); }
+                            else part[b] = merged;
+                        }
+                    }
+                    off = bs + en;
+                }
+            }
+
+            /// <summary>Сколько байт записано подряд с этого места куска</summary>
+            public int From(int off)
+            {
+                int pos = off;
+                while (pos < size)
+                {
+                    int b = pos / Block, bs = b * Block;
+                    if (full[b]) { pos = bs + BlockLen(b); continue; }
+                    if (part.TryGetValue(b, out var iv))
+                        foreach (var x in iv)
+                            if (x[0] <= pos - bs && x[1] > pos - bs) { pos = bs + x[1]; break; }
+                    break;
+                }
+                return pos - off;
+            }
         }
 
         /// <summary>Кусок в памяти — для /cache и страницы отладки</summary>
@@ -109,9 +177,12 @@ namespace TorrStreamTorrServer
                     data.Slice(0, n).CopyTo(new Span<byte>(slot.Data, inPiece, n));
                     slot.Touched = Now();
                     slot.Written = Math.Min(PieceSize(piece), slot.Written + n);
+                    (slot.Got ?? (slot.Got = new Coverage(PieceSize(piece)))).Mark(inPiece, n);
                     offset += n;
                     data = data.Slice(n);
                 }
+                // Читатель в ResponsiveMode ждёт блоки, а не весь кусок
+                Monitor.PulseAll(sync);
             }
             if (evicted != null)
                 foreach (int p in evicted) Evicted(p);
@@ -124,6 +195,47 @@ namespace TorrStreamTorrServer
         public int Read(long offset, Span<byte> dst)
         {
             lock (sync) return ReadLocked(offset, dst, false);
+        }
+
+        /// <summary>
+        /// ResponsiveMode, как у TorrServer: для плеера — сколько байт этого куска
+        /// пришло подряд с этого места, не дожидаясь проверки всего куска
+        /// </summary>
+        public int ReadAvailable(long offset, Span<byte> dst)
+        {
+            lock (sync)
+            {
+                int piece = (int)(offset / PieceLength);
+                int inPiece = (int)(offset - (long)piece * PieceLength);
+                int n = Math.Min(dst.Length, AvailableLocked(piece, inPiece));
+                if (n <= 0) return 0;
+                Slot slot = slots[piece];
+                new ReadOnlySpan<byte>(slot.Data, inPiece, n).CopyTo(dst);
+                slot.Touched = Now();
+                return n;
+            }
+        }
+
+        int AvailableLocked(int piece, int inPiece)
+        {
+            Slot slot;
+            if (!slots.TryGetValue(piece, out slot)) return 0;
+            if (slot.Verified) return PieceSize(piece) - inPiece;
+            return slot.Got != null ? slot.Got.From(inPiece) : 0;
+        }
+
+        /// <summary>Ждать хотя бы байт с этого места не дольше timeoutMs (ResponsiveMode)</summary>
+        public bool WaitAvailable(long offset, int timeoutMs)
+        {
+            int piece = (int)(offset / PieceLength);
+            int inPiece = (int)(offset - (long)piece * PieceLength);
+            lock (sync)
+            {
+                if (AvailableLocked(piece, inPiece) > 0) return true;
+                if (disposed) return false;
+                Monitor.Wait(sync, timeoutMs);
+                return AvailableLocked(piece, inPiece) > 0;
+            }
         }
 
         /// <summary>То же, но только из проверенных кусков — для плеера</summary>
@@ -152,19 +264,24 @@ namespace TorrStreamTorrServer
             return done;
         }
 
-        /// <summary>MonoTorrent проверил хэш куска (TorrentManager.PieceHashed)</summary>
-        public void MarkHashed(int piece, bool passed)
+        /// <summary>
+        /// MonoTorrent проверил хэш куска (TorrentManager.PieceHashed). true — кусок
+        /// был в памяти с данными (а не начальная проверка пустого торрента)
+        /// </summary>
+        public bool MarkHashed(int piece, bool passed)
         {
             lock (sync)
             {
                 Slot slot;
-                if (slots.TryGetValue(piece, out slot))
+                bool had = slots.TryGetValue(piece, out slot) && slot.Written > 0;
+                if (slot != null)
                 {
                     slot.Verified = passed;
                     slot.Touched = Now();
-                    if (!passed) slot.Written = 0;   // скачается заново
+                    if (!passed) { slot.Written = 0; slot.Got = null; }   // скачается заново
                 }
                 Monitor.PulseAll(sync);
+                return had;
             }
         }
 

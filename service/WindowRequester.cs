@@ -41,6 +41,7 @@ namespace TorrStreamTorrServer
         public static readonly ReadWindow None = new ReadWindow { Primary = -1 };
         public int Primary;          // кусок главного читателя
         public int PrimaryEnd;       // последний кусок его окна (включительно)
+        public long PrimaryOffset = -1; // его позиция от начала торрента — с неё просим блоки (PositionPicker)
         public int[] Secondary;      // куски остальных читателей
     }
 
@@ -79,7 +80,12 @@ namespace TorrStreamTorrServer
             Temp = new BitField(TorrentData.PieceCount);
             Range = new BitField(TorrentData.PieceCount);
 
-            var standardPicker = new StandardPicker();
+            // StandardPicker, но блоки куска под читателем — с его позиции (PositionPicker.cs)
+            var standardPicker = new PositionPicker(() =>
+            {
+                var w = Current();
+                return w.Primary >= 0 ? w.PrimaryOffset : -1;
+            });
             HighPriorityPicker = IgnoringPicker.Wrap(new PriorityPicker(standardPicker), IgnoringBitfields);
             // По порядку, без RandomisedPicker/RarestFirstPicker — см. выше
             LowPriorityPicker = IgnoringPicker.Wrap(new PriorityPicker(standardPicker), IgnoringBitfields);
@@ -95,7 +101,7 @@ namespace TorrStreamTorrServer
             if (TorrentData == null || w.Primary < 0 || w.Primary >= TorrentData.PieceCount) return ReadWindow.None;
             int end = Math.Max(w.Primary, Math.Min(TorrentData.PieceCount - 1, w.PrimaryEnd));
             if (end == w.PrimaryEnd) return w;
-            return new ReadWindow { Primary = w.Primary, PrimaryEnd = end, Secondary = w.Secondary };
+            return new ReadWindow { Primary = w.Primary, PrimaryEnd = end, Secondary = w.Secondary, PrimaryOffset = w.PrimaryOffset };
         }
 
         public void AddRequests(ReadOnlySpan<(IRequester Peer, ReadOnlyBitField Available)> peers)
@@ -155,6 +161,13 @@ namespace TorrStreamTorrServer
                     if (s >= 0 && s < TorrentData.PieceCount)
                         AddRequests(peer, available, allPeers, s, Math.Min(s + 1, TorrentData.PieceCount - 1), 2, AsManyAsPeerTakes, w);
             AddRequests(peer, available, allPeers, w.Primary, w.PrimaryEnd, 1, AsManyAsPeerTakes, w);
+            // Кусок позади читателя: его начало (до места перемотки) PositionPicker
+            // не просил, пока читатель был в нём, — в последнюю очередь, если у пира
+            // осталось место в очереди. Канал занят окном — начало так и не
+            // скачается: кусок не пройдёт проверку (его блоки плеер уже получил,
+            // как в ResponsiveMode у TorrServer), при шаге назад скачается заново
+            if (w.Primary > 0)
+                AddRequests(peer, available, allPeers, w.Primary - 1, w.Primary - 1, 1, AsManyAsPeerTakes, w);
         }
 
         void AddRequests(IRequester peer, ReadOnlyBitField available, ReadOnlySpan<ReadOnlyBitField> allPeers, int startPieceIndex, int endPieceIndex, int maxDuplicates, int preferredMaxRequests, ReadWindow w)

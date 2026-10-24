@@ -696,7 +696,8 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
     CacheSize: 'Кэш на торрент, МБ', ReaderReadAHead: 'Вперёд от читателя, %', PreloadCache: 'Предзагрузка, % кэша',
     ConnectionsLimit: 'Пиров на торрент', TorrentDisconnectTimeout: 'Закрыть без читателей, с', PeersListenPort: 'Порт пиров',
     EnableDHT: 'DHT', EnableUPNP: 'UPnP', DownloadRateLimit: 'Ограничение ↓, КБ/с', UploadRateLimit: 'Ограничение ↑, КБ/с',
-    RetrackersMode: 'Ретрекеры (0 — нет, 1 — добавлять)'
+    RetrackersMode: 'Ретрекеры (0 — нет, 1 — добавлять)',
+    ResponsiveMode: 'Отдавать блоки до проверки куска'
   };
   function loadSettings() {
     post('/settings', { action: 'get' }, function (err, s) {

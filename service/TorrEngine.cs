@@ -527,7 +527,10 @@ namespace TorrStreamTorrServer
                     m.PieceHashed += (s, a) =>
                     {
                         var store = e.Store;
-                        if (store != null) store.MarkHashed(a.PieceIndex, a.HashPassed);
+                        bool had = store != null && store.MarkHashed(a.PieceIndex, a.HashPassed);
+                        // В ResponsiveMode его блоки могли уже уйти плееру — видно, откуда артефакты.
+                        // Без данных — это начальная проверка .torrent, она вся «не проходит»
+                        if (!a.HashPassed && had) log(e.Hash + ": кусок " + a.PieceIndex + " не прошёл проверку хэша, качается заново");
                     };
                     var d = e.Diag;
                     m.PeersFound += (s, a) =>
@@ -1020,6 +1023,7 @@ namespace TorrStreamTorrServer
             {
                 Primary = pp,
                 PrimaryEnd = Math.Min(primary.Stat.File.EndPieceIndex, pp + ahead - 1),
+                PrimaryOffset = primary.Stat.File.OffsetInTorrent + Math.Min(primary.Position, Math.Max(0, primary.Stat.Length - 1)),
                 Secondary = live.Where(r => r != primary).Select(r => PieceOf(r, pl)).Distinct().Where(x => x != pp).ToArray(),
             };
         }
@@ -1047,9 +1051,12 @@ namespace TorrStreamTorrServer
                 long tOff = f.File.OffsetInTorrent + r.Position;
                 int piece = (int)(tOff / pl);
                 int n = (int)Math.Min(count, Math.Min(f.Length - r.Position, (long)(piece + 1) * pl - tOff));
-                if (store.WaitVerified(piece, 250))
+                // ResponsiveMode — блоки по мере прихода, иначе кусок целиком после проверки
+                bool responsive = Settings.ResponsiveMode;
+                if (responsive ? store.WaitAvailable(tOff, 250) : store.WaitVerified(piece, 250))
                 {
-                    int got = store.ReadVerified(tOff, new Span<byte>(buffer, offset, n));
+                    var span = new Span<byte>(buffer, offset, n);
+                    int got = responsive ? store.ReadAvailable(tOff, span) : store.ReadVerified(tOff, span);
                     if (got > 0)
                     {
                         int before = piece;

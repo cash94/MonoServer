@@ -140,6 +140,20 @@ namespace TorrStreamTorrServer
             set { lock (sync) capacity = value; }
         }
 
+        /// <summary>Сколько скачано байт в памяти (у TorrServer это cache.Filled)</summary>
+        public long Downloaded
+        {
+            get
+            {
+                lock (sync)
+                {
+                    long sum = 0;
+                    foreach (var kv in slots) sum += kv.Value.Verified ? PieceSize(kv.Key) : kv.Value.Written;
+                    return sum;
+                }
+            }
+        }
+
         /// <summary>Сколько байт держат куски (выделенные буферы)</summary>
         public long Filled
         {
@@ -319,6 +333,25 @@ namespace TorrStreamTorrServer
                     Slot slot;
                     if (!slots.TryGetValue(piece, out slot) || !slot.Verified) break;
                     pos = (long)(piece + 1) * PieceLength;
+                }
+                return Math.Max(0, Math.Min(pos, end) - offset);
+            }
+        }
+
+        /// <summary>Сколько байт есть подряд с этого места (и непроверенных), не дальше limit</summary>
+        public long AvailableRun(long offset, long limit)
+        {
+            lock (sync)
+            {
+                long end = Math.Min(TotalSize, offset + limit), pos = offset;
+                while (pos < end)
+                {
+                    int piece = (int)(pos / PieceLength);
+                    int inPiece = (int)(pos - (long)piece * PieceLength);
+                    int got = AvailableLocked(piece, inPiece);
+                    if (got <= 0) break;
+                    pos += got;
+                    if (inPiece + got < PieceSize(piece)) break;   // кусок дальше не докачан
                 }
                 return Math.Max(0, Math.Min(pos, end) - offset);
             }

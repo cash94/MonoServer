@@ -64,6 +64,8 @@ namespace TorrStreamTorrServer
         // Что качать (WindowRequester спрашивает на каждом такте) — считается
         // вместе с Protect, при смене читателей и переходе через кусок
         public volatile ReadWindow Window = ReadWindow.None;
+        // Замена медленных пиров (PeerRotation.cs)
+        public readonly PeerRotation Rotation = new PeerRotation();
 
         public bool Active => Manager != null;
         public bool HasInfo => Files.Count > 0;
@@ -268,7 +270,9 @@ namespace TorrStreamTorrServer
         {
             return new TorrentSettingsBuilder
             {
-                MaximumConnections = Settings.ConnectionsLimit,
+                // С запасом под незавершённые подключения: MonoTorrent считает их в
+                // лимит, лишних сверх ConnectionsLimit отключает PeerRotation
+                MaximumConnections = Settings.ConnectionsLimit + PeerRotation.Headroom(Settings.ConnectionsLimit),
                 UploadSlots = 4,
                 AllowDht = Settings.EnableDHT,
                 AllowPeerExchange = true,
@@ -891,10 +895,13 @@ namespace TorrStreamTorrServer
             var idle = new List<KeyValuePair<TorrEntry, long>>();
             long now = Now();
             var reports = new List<string>();
+            var rotate = new List<KeyValuePair<TorrEntry, bool>>();
             lock (sync)
             {
                 foreach (var e in entries.Values)
                 {
+                    if (e.Manager != null && e.Manager.HasMetadata && e.Manager.State == TorrentState.Downloading)
+                        rotate.Add(new KeyValuePair<TorrEntry, bool>(e, NeedsDownload(e)));
                     if (e.Manager != null)
                     {
                         bool noInfo = !e.Manager.HasMetadata;
@@ -912,6 +919,12 @@ namespace TorrStreamTorrServer
             }
             foreach (var r in reports) log(r);
             try { dhtBoot?.Tick(engine != null && engine.IsRunning, now); } catch (Exception ex) { log("DHT: " + ex.Message); }
+            // Вне sync: PeerRotation ждёт главный цикл MonoTorrent, а его обработчики берут sync
+            foreach (var kv in rotate)
+            {
+                string r = kv.Key.Rotation.Tick(engine, kv.Key.Manager, Settings.ConnectionsLimit, kv.Value, now);
+                if (r != null) log(kv.Key.Hash + ": " + r);
+            }
             foreach (var kv in idle)
             {
                 var e = kv.Key;
@@ -921,6 +934,20 @@ namespace TorrStreamTorrServer
                         lock (sync) if (!e.InDb && e.Manager == null && e.Activation == null) entries.Remove(e.Hash);
                 });
             }
+        }
+
+        // Есть что качать: идёт предзагрузка или в окне главного читателя есть
+        // непроверенные куски. Окно скачано — скорость пиров упирается в нас, а не
+        // в них, и сравнивать её незачем. Под sync
+        static bool NeedsDownload(TorrEntry e)
+        {
+            if (e.Preloading) return true;
+            var w = e.Window;
+            var store = e.Store;
+            if (w == null || w.Primary < 0 || store == null) return false;
+            for (int p = w.Primary; p <= w.PrimaryEnd; p++)
+                if (!store.IsVerified(p)) return true;
+            return false;
         }
 
         // Под sync
@@ -962,6 +989,16 @@ namespace TorrStreamTorrServer
         public FileStat FileById(TorrEntry e, int id)
         {
             lock (sync) return e.Files.FirstOrDefault(f => f.Id == id);
+        }
+
+        /// <summary>Единственный файл раздачи (без заполнителей) или null</summary>
+        public FileStat SingleFile(TorrEntry e)
+        {
+            lock (sync)
+            {
+                var real = e.Files.Where(f => f.File != null).Take(2).ToList();
+                return real.Count == 1 ? real[0] : null;
+            }
         }
 
         public TorrReader OpenReader(TorrEntry e, FileStat f, long position)
@@ -1158,10 +1195,12 @@ namespace TorrStreamTorrServer
             }
         }
 
-        // «Буфер TorrServer» в плеере — preloaded_bytes. Пока идёт предзагрузка —
-        // её прогресс; при просмотре — сколько скачано подряд вперёд от позиции
-        // главного читателя (из размера окна); без читателей — сколько в кэше.
-        // Раньше здесь навсегда оставался итог предзагрузки (32 МБ). Под sync
+        // «TorrServer: …» в плеере — preloaded_bytes. Как у TorrServer
+        // (torr/torrent.go: PreloadedBytes = cache.Filled): пока идёт предзагрузка —
+        // её прогресс, дальше — сколько кэша занято (то же, что на странице).
+        // Раньше здесь было «скачано и проверено подряд от позиции читателя»: с
+        // ResponsiveMode читатель стоит в ещё не проверенном куске, и плеер
+        // показывал 0–3 МБ при полном кэше. Под sync
         void BufferState(TorrEntry e, long filled, out long buffered, out long size)
         {
             if (e.Preloading || e.Store == null)
@@ -1170,18 +1209,9 @@ namespace TorrStreamTorrServer
                 size = e.PreloadSize;
                 return;
             }
-            var primary = e.Readers.Where(r => !r.Closed && r.Stat.File != null).OrderByDescending(r => r.Seq).FirstOrDefault();
-            int pl = PieceLengthOf(e);
-            if (primary == null || pl <= 0)
-            {
-                buffered = filled;
-                size = e.Store.Capacity;
-                return;
-            }
-            long window = (long)AheadPieces(pl) * pl;
-            long left = Math.Max(0, primary.Stat.Length - primary.Position);
-            size = Math.Max(1, Math.Min(window, left));
-            buffered = e.Store.VerifiedRun(primary.Stat.File.OffsetInTorrent + primary.Position, size);
+            // Скачанное, а не выделенное: начатый кусок по 8 МБ — не 8 МБ кэша
+            buffered = e.Store.Downloaded;
+            size = e.PreloadSize > 0 ? e.PreloadSize : e.Store.Capacity;
         }
 
         // TorrServer кладёт список файлов и в «data» — фронтенд читает и оттуда
@@ -1268,7 +1298,8 @@ namespace TorrStreamTorrServer
             {
                 long left = Math.Max(0, r.Length - r.Pos);
                 long window = Math.Min((long)ahead * pl, left);
-                long run = store != null ? store.VerifiedRun(r.Offset + r.Pos, window) : 0;
+                // Подряд от позиции — и непроверенные блоки: в ResponsiveMode плеер их читает
+                long run = store != null ? (Settings.ResponsiveMode ? store.AvailableRun(r.Offset + r.Pos, window) : store.VerifiedRun(r.Offset + r.Pos, window)) : 0;
                 int inWindow = 0;
                 foreach (var pc in pieces) if (pc.Verified && pc.Id >= r.Piece && pc.Id <= r.End) inWindow++;
                 w.Obj().Prop("Start", r.Piece).Prop("End", r.End).Prop("Reader", r.Piece)
@@ -1289,6 +1320,7 @@ namespace TorrStreamTorrServer
             w.Key("Diag").Obj();
             lock (d)
             {
+                w.Prop("Rotated", e.Rotation.Rotated).Prop("RotationSupported", PeerRotation.Supported);
                 w.Key("Found").Obj().Prop("tracker", d.Tracker).Prop("dht", d.Dht).Prop("pex", d.Pex).Prop("lpd", d.Lpd).EndObj();
                 w.Key("Fails").Obj();
                 foreach (var kv in d.Fails) w.Prop(kv.Key, kv.Value);

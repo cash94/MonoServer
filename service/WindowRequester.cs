@@ -48,6 +48,11 @@ namespace TorrStreamTorrServer
     public class WindowRequester : IStreamingPieceRequester
     {
         const int HighPriorityCount = 15;
+        // Срочная зона у позиции — куски, которые можно просить сразу у двух пиров:
+        // не меньше 2 кусков и не меньше ~4 МБ. При кусках по 256 КБ два куска —
+        // полмегабайта, и кусок через 1–4 МБ, застрявший у медленного пира, держал
+        // «скачано подряд» на нуле, хотя всё дальше уже было
+        const long UrgentBytes = 4L << 20;
         // Без своего предела: Math.Min с peer.MaxPendingRequests ниже
         const int AsManyAsPeerTakes = int.MaxValue;
         // Сколько блоков выбирать за раз (буфер PickPiece)
@@ -91,6 +96,13 @@ namespace TorrStreamTorrServer
             LowPriorityPicker = IgnoringPicker.Wrap(new PriorityPicker(standardPicker), IgnoringBitfields);
             LowPriorityPicker.Initialise(torrentData);
             HighPriorityPicker.Initialise(torrentData);
+        }
+
+        int UrgentEnd(ReadWindow w)
+        {
+            int pl = TorrentData != null ? TorrentData.PieceLength : 0;
+            int count = pl > 0 ? (int)Math.Max(2, Math.Min(HighPriorityCount, (UrgentBytes + pl - 1) / pl)) : 2;
+            return Math.Min(w.Primary + count - 1, w.PrimaryEnd);
         }
 
         ReadWindow Current()
@@ -139,7 +151,7 @@ namespace TorrStreamTorrServer
             foreach (var supportsFastPeer in new[] { true, false })
                 for (int i = 0; i < 4; i++)
                     foreach (var peer in fastestPeers.Where(p => p.Peer.SupportsFastPeer == supportsFastPeer))
-                        AddRequests(peer.Peer, peer.Available, otherAvailable, w.Primary, Math.Min(w.Primary + 1, w.PrimaryEnd), 2, (i + 1) * 2, w);
+                        AddRequests(peer.Peer, peer.Available, otherAvailable, w.Primary, UrgentEnd(w), 2, (i + 1) * 2, w);
 
             foreach (var peer in peers)
                 AddRequests(peer.Peer, peer.Available, otherAvailable, w);
@@ -155,12 +167,17 @@ namespace TorrStreamTorrServer
 
         void AddRequests(IRequester peer, ReadOnlyBitField available, ReadOnlySpan<ReadOnlyBitField> allPeers, ReadWindow w)
         {
-            AddRequests(peer, available, allPeers, w.Primary, Math.Min(w.Primary + 1, w.PrimaryEnd), 2, AsManyAsPeerTakes, w);
+            AddRequests(peer, available, allPeers, w.Primary, UrgentEnd(w), 2, AsManyAsPeerTakes, w);
             if (w.Secondary != null)
                 foreach (int s in w.Secondary)
                     if (s >= 0 && s < TorrentData.PieceCount)
                         AddRequests(peer, available, allPeers, s, Math.Min(s + 1, TorrentData.PieceCount - 1), 2, AsManyAsPeerTakes, w);
             AddRequests(peer, available, allPeers, w.Primary, w.PrimaryEnd, 1, AsManyAsPeerTakes, w);
+            // Окно всё запрошено, а у пира ещё есть место в очереди — тот же кусок и у
+            // него (до 2 пиров на блок). Иначе куски, застрявшие у медленного пира,
+            // висели десятки секунд, пока остальные пиры при полном окне простаивали,
+            // и «скачано подряд» от позиции упиралось в первый такой кусок
+            AddRequests(peer, available, allPeers, w.Primary, w.PrimaryEnd, 2, AsManyAsPeerTakes, w);
             // Кусок позади читателя: его начало (до места перемотки) PositionPicker
             // не просил, пока читатель был в нём, — в последнюю очередь, если у пира
             // осталось место в очереди. Канал занят окном — начало так и не

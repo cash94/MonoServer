@@ -498,6 +498,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
   function diagBlock(d) {
     if (!d) return '';
     var f = d.Found || {}, html = '<div class="muted" style="margin-top:10px;font-size:12px">Найдено пиров: трекеры ' + f.tracker + ', DHT ' + f.dht + ', PEX ' + f.pex + ', локальная сеть ' + f.lpd;
+    html += '<br>Медленных пиров заменено: ' + (d.RotationSupported === false ? 'недоступно (нет внутренностей MonoTorrent)' : (d.Rotated || 0));
     var fails = [];
     for (var k in d.Fails) fails.push(k + ' ' + d.Fails[k]);
     if (fails.length) html += '<br>Не подключились: ' + esc(fails.join(', '));

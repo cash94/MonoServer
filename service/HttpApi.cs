@@ -498,8 +498,16 @@ namespace TorrStreamTorrServer
             if (e == null)
                 e = engine.AddAsync(hash, null, null, null, null, false).GetAwaiter().GetResult();
             if (!engine.WaitInfoAsync(e, InfoTimeoutMs).GetAwaiter().GetResult()) return SendText(s, req, 404, "torrent info timeout");
-            if (!int.TryParse(parts[2], out int index)) return SendText(s, req, 400, "wrong index");
-            var stat = engine.FileById(e, index);
+            // Как у TorrServer (web/api/play.go): файл в раздаче один — он, какой бы
+            // номер ни пришел; иначе номер — число из file_stats
+            var single = engine.SingleFile(e);
+            FileStat stat;
+            if (single != null) stat = single;
+            else
+            {
+                if (!int.TryParse(parts[2], out int index)) return SendText(s, req, 400, "file \"index\" is wrong");
+                stat = engine.FileById(e, index);
+            }
             if (stat == null || stat.File == null) return SendText(s, req, 404, "file index out of range");
             return ServeFile(client, s, req, e, stat);
         }

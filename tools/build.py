@@ -122,6 +122,12 @@ def build_linux(version, out, work):
             info.mode = 0o755
             with open(os.path.join(pub, 'TorrServerPc'), 'rb') as f:
                 tar.addfile(info, f)
+            # Скрипт запуска и службы systemd — рядом с программой
+            script = os.path.join(ROOT, 'linux', 'torrserver.sh')
+            si = tar.gettarinfo(script, arcname='torrserver.sh')
+            si.mode = 0o755
+            with open(script, 'rb') as f:
+                tar.addfile(si, f)
             notices = open(os.path.join(SERVICE, 'res', 'THIRD-PARTY-NOTICES.txt'), 'rb').read()
             ti = tarfile.TarInfo('THIRD-PARTY-NOTICES.txt')
             ti.size = len(notices)

@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# TorrServer (TorrServer-Tizen для Linux): служба systemd или запуск в терминале.
+#
+#   ./torrserver.sh install     — поставить службу и запустить (спросит порт, Enter — 8090)
+#   ./torrserver.sh uninstall   — остановить и удалить службу (данные остаются)
+#   ./torrserver.sh status      — состояние службы и адрес
+#   ./torrserver.sh log         — журнал службы (Ctrl+C — выход)
+#   ./torrserver.sh run         — запустить в этом терминале (Ctrl+C — стоп)
+#   ./torrserver.sh             — то же, что install
+#
+# Параметры: -p ПОРТ (без вопроса), -y (порт по умолчанию без вопроса),
+# -d КАТАЛОГ (данные; по умолчанию ~/.local/share/torrserver-tizen),
+# --system (служба для всей системы через sudo, а не пользовательская).
+#
+# Порт проверяется: занят — скрипт скажет кем и спросит другой. Программа
+# TorrServer ищется рядом со скриптом (так лежат файлы в архиве
+# TorrServer-linux-*.tar.gz); нет её — скрипт предложит скачать последний
+# релиз под архитектуру (x64 или arm64). Служба запускается при загрузке
+# компьютера; программа и скрипт для неё копируются в постоянный каталог, так
+# что архив после установки можно удалить.
+set -u
+
+NAME="torrserver-tizen"
+DEFAULT_PORT=8090
+REPO="cash94/TorrServer-Tizen"
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+SRC_BIN="$HERE/TorrServer"
+DATA=""
+PORT=""
+ASK=1
+SYSTEM=0
+CMD="install"
+
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
+die() { echo "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        install|uninstall|status|log|run) CMD="$1"; shift ;;
+        -p|--port) PORT="${2:-}"; ASK=0; shift 2 ;;
+        -d|--data) DATA="${2:-}"; shift 2 ;;
+        -y|--yes) ASK=0; shift ;;
+        --system) SYSTEM=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Неизвестный параметр: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+# ---------- где что лежит ----------
+
+if [ "$SYSTEM" = 1 ]; then
+    SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+    RUN_USER="${SUDO_USER:-$(id -un)}"
+    RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+    INSTALL_DIR="/opt/$NAME"
+    UNIT_PATH="/etc/systemd/system/$NAME.service"
+    SCTL() { $SUDO systemctl "$@"; }
+    JCTL() { $SUDO journalctl -u "$NAME" "$@"; }
+else
+    SUDO=""
+    RUN_USER="$(id -un)"
+    RUN_HOME="$HOME"
+    INSTALL_DIR="$HOME/.local/lib/$NAME"
+    UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$NAME.service"
+    SCTL() { systemctl --user "$@"; }
+    JCTL() { journalctl --user -u "$NAME" "$@"; }
+fi
+[ -z "$DATA" ] && DATA="${TS_DATA:-$RUN_HOME/.local/share/$NAME}"
+CONF="$INSTALL_DIR/port"
+
+lan_ip() { hostname -I 2>/dev/null | awk '{print $1}'; }
+
+print_addresses() {
+    local ip; ip="$(lan_ip)"
+    echo "  в этом компьютере: http://127.0.0.1:$1/"
+    [ -n "$ip" ] && echo "  в домашней сети:   http://$ip:$1/  (адрес для TorrStream, Lampa)"
+}
+
+# ---------- порт ----------
+
+valid_port() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+# Кто слушает порт (TCP): пусто — свободен
+port_owner() {
+    local p="$1" out=""
+    if command -v ss >/dev/null 2>&1; then
+        out="$(ss -Hltnp "sport = :$p" 2>/dev/null)"
+        [ -z "$out" ] && out="$(ss -Hltn "sport = :$p" 2>/dev/null)"
+    elif command -v netstat >/dev/null 2>&1; then
+        out="$(netstat -ltnp 2>/dev/null | awk -v p=":$p" '$4 ~ p"$"')"
+    elif command -v lsof >/dev/null 2>&1; then
+        out="$(lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | tail -n +2)"
+    else
+        if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then out="занят"; fi
+    fi
+    printf '%s' "$out"
+}
+
+describe_owner() {
+    # users:(("TorrServer",pid=123,fd=7)) → TorrServer (pid 123)
+    local who
+    who="$(printf '%s' "$1" | grep -o 'users:(("[^"]*",pid=[0-9]*' | head -1 | sed 's/users:(("\([^"]*\)",pid=\([0-9]*\)/\1 (pid \2)/')"
+    [ -n "$who" ] && printf '%s' "$who" || printf 'другая программа'
+}
+
+choose_port() {
+    local suggest="$DEFAULT_PORT" owner
+    [ -f "$CONF" ] && suggest="$(cat "$CONF" 2>/dev/null || echo "$DEFAULT_PORT")"
+    valid_port "$suggest" || suggest="$DEFAULT_PORT"
+    while :; do
+        if [ "$ASK" = 1 ] && [ -z "$PORT" ] && [ -t 0 ]; then
+            read -r -p "Порт TorrServer [$suggest]: " PORT
+        fi
+        [ -z "$PORT" ] && PORT="$suggest"
+        if ! valid_port "$PORT"; then
+            echo "«$PORT» — не номер порта (нужно число 1–65535)." >&2
+            [ "$ASK" = 1 ] && [ -t 0 ] && { PORT=""; continue; }
+            exit 1
+        fi
+        owner="$(port_owner "$PORT")"
+        if [ -n "$owner" ]; then
+            echo "Порт $PORT занят: $(describe_owner "$owner")." >&2
+            [ "$ASK" = 1 ] && [ -t 0 ] && { PORT=""; continue; }
+            die "Укажите другой: $0 $CMD -p <порт>"
+        fi
+        return 0
+    done
+}
+
+# ---------- программа ----------
+
+download() {
+    local arch asset url tmp
+    case "$(uname -m)" in
+        x86_64|amd64) arch=x64 ;;
+        aarch64|arm64) arch=arm64 ;;
+        *) echo "Архитектура $(uname -m) не поддерживается: есть сборки для x86_64 и aarch64 (64-битная ARM)." >&2; return 1 ;;
+    esac
+    asset="TorrServer-linux-$arch.tar.gz"
+    url="https://github.com/$REPO/releases/latest/download/$asset"
+    tmp="$(mktemp -d)" || return 1
+    echo "Скачиваю $url"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --progress-bar -o "$tmp/$asset" "$url" || { rm -rf "$tmp"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --show-progress -O "$tmp/$asset" "$url" || { rm -rf "$tmp"; return 1; }
+    else
+        echo "Нужен curl или wget." >&2; rm -rf "$tmp"; return 1
+    fi
+    tar xzf "$tmp/$asset" -C "$HERE" TorrServer || { rm -rf "$tmp"; return 1; }
+    rm -rf "$tmp"
+    chmod +x "$SRC_BIN"
+}
+
+ensure_binary() {
+    [ -x "$SRC_BIN" ] && return 0
+    # Скрипт уже из каталога службы — программа там
+    [ -x "$INSTALL_DIR/TorrServer" ] && { SRC_BIN="$INSTALL_DIR/TorrServer"; return 0; }
+    echo "Рядом со скриптом нет программы TorrServer ($SRC_BIN)."
+    local answer="n"
+    if [ -t 0 ]; then read -r -p "Скачать последний релиз с GitHub? [Y/n]: " answer; answer="${answer:-y}"; fi
+    case "$answer" in
+        y|Y|д|Д|yes|да) download || die "Не скачалось. Архив вручную: https://github.com/$REPO/releases/latest" ;;
+        *) die "Архив: https://github.com/$REPO/releases/latest — распакуйте рядом со скриптом." ;;
+    esac
+}
+
+# ---------- команды ----------
+
+service_exists() { [ -f "$UNIT_PATH" ] || $SUDO test -f "$UNIT_PATH"; }
+
+cmd_install() {
+    command -v systemctl >/dev/null 2>&1 || die "Нет systemd (systemctl) — запустите в терминале: $0 run"
+    ensure_binary
+    # Переустановка: остановить старую службу, чтобы её порт не считался занятым
+    if service_exists; then
+        echo "Служба $NAME уже стоит — обновляю."
+        SCTL stop "$NAME" 2>/dev/null
+    fi
+    choose_port
+
+    $SUDO mkdir -p "$INSTALL_DIR" || exit 1
+    if [ "$(readlink -f "$SRC_BIN")" != "$(readlink -f "$INSTALL_DIR/TorrServer")" ]; then
+        $SUDO install -m 755 "$SRC_BIN" "$INSTALL_DIR/TorrServer" || exit 1
+    fi
+    if [ "$(readlink -f "$0")" != "$(readlink -f "$INSTALL_DIR/torrserver.sh")" ]; then
+        $SUDO install -m 755 "$0" "$INSTALL_DIR/torrserver.sh" || exit 1
+    fi
+    [ -f "$HERE/THIRD-PARTY-NOTICES.txt" ] && $SUDO install -m 644 "$HERE/THIRD-PARTY-NOTICES.txt" "$INSTALL_DIR/" 2>/dev/null
+    echo "$PORT" | $SUDO tee "$CONF" >/dev/null
+    if [ "$SYSTEM" = 1 ]; then
+        $SUDO mkdir -p "$DATA" && $SUDO chown "$RUN_USER" "$DATA"
+    else
+        mkdir -p "$DATA"
+    fi
+
+    local unit_user="" wanted="default.target"
+    if [ "$SYSTEM" = 1 ]; then unit_user="User=$RUN_USER"; wanted="multi-user.target"; fi
+    $SUDO mkdir -p "$(dirname "$UNIT_PATH")"
+    $SUDO tee "$UNIT_PATH" >/dev/null <<EOF
+# Создано torrserver.sh ($REPO). Порт и каталог — повторный ./torrserver.sh install
+[Unit]
+Description=TorrServer (TorrServer-Tizen, порт $PORT)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+$unit_user
+ExecStart="$INSTALL_DIR/TorrServer" $PORT "$DATA"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=$wanted
+EOF
+    SCTL daemon-reload || exit 1
+    SCTL enable --now "$NAME" || die "Служба не запустилась — журнал: $0 log"
+
+    # Пользовательская служба без входа в систему стартует, только если включено «linger»
+    if [ "$SYSTEM" = 0 ] && command -v loginctl >/dev/null 2>&1; then
+        if [ "$(loginctl show-user "$RUN_USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
+            if loginctl enable-linger "$RUN_USER" 2>/dev/null || sudo loginctl enable-linger "$RUN_USER"; then
+                echo "Автозапуск при загрузке включён (loginctl enable-linger)."
+            else
+                echo "Внимание: без «loginctl enable-linger $RUN_USER» служба стартует только после входа в систему." >&2
+            fi
+        fi
+    fi
+
+    # Ответила ли
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -fs --max-time 2 "http://127.0.0.1:$PORT/echo" >/dev/null 2>&1; then break; fi
+        sleep 1
+    done
+    echo "Служба $NAME запущена и включена при загрузке: порт $PORT, данные $DATA"
+    print_addresses "$PORT"
+    echo "  состояние: $INSTALL_DIR/torrserver.sh status$([ "$SYSTEM" = 1 ] && echo ' --system'), журнал: … log"
+}
+
+cmd_uninstall() {
+    service_exists || die "Служба $NAME не установлена$([ "$SYSTEM" = 0 ] && echo ' (для системной — с --system)')."
+    SCTL disable --now "$NAME" 2>/dev/null
+    $SUDO rm -f "$UNIT_PATH"
+    SCTL daemon-reload
+    $SUDO rm -rf "$INSTALL_DIR"
+    echo "Служба $NAME удалена. Данные остались: $DATA"
+}
+
+cmd_status() {
+    service_exists || die "Служба $NAME не установлена$([ "$SYSTEM" = 0 ] && echo ' (для системной — с --system)')."
+    SCTL --no-pager status "$NAME" | head -n 5
+    local p; p="$(cat "$CONF" 2>/dev/null)"
+    if [ -n "$p" ]; then
+        if curl -fs --max-time 2 "http://127.0.0.1:$p/echo" >/dev/null 2>&1; then
+            echo "Отвечает: $(curl -fs --max-time 2 "http://127.0.0.1:$p/echo")"
+            print_addresses "$p"
+        else
+            echo "На порту $p не отвечает — журнал: $0 log$([ "$SYSTEM" = 1 ] && echo ' --system')"
+        fi
+    fi
+}
+
+cmd_log() { JCTL -f -n 100; }
+
+cmd_run() {
+    ensure_binary
+    choose_port
+    mkdir -p "$DATA" || exit 1
+    echo "TorrServer: порт $PORT, данные $DATA"
+    print_addresses "$PORT"
+    echo "  остановить: Ctrl+C"
+    exec "$SRC_BIN" "$PORT" "$DATA"
+}
+
+case "$CMD" in
+    install) cmd_install ;;
+    uninstall) cmd_uninstall ;;
+    status) cmd_status ;;
+    log) cmd_log ;;
+    run) cmd_run ;;
+esac

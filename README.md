@@ -38,6 +38,30 @@ TorrServer → «Использовать TorrServer, установленный
 
 ## Linux
 
+Одной командой — служба systemd с автозапуском (спросит порт, Enter — 8090,
+проверит, свободен ли; программу для x64 или arm64 скачает из релиза):
+
+```bash
+mkdir -p ~/torrserver && cd ~/torrserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/torrserver.sh -o torrserver.sh && bash torrserver.sh install
+```
+
+Скрипт `linux/torrserver.sh` (он же в архивах релиза):
+
+| Команда | Что делает |
+|---|---|
+| `./torrserver.sh install` | поставить службу и запустить; повторно — обновить или сменить порт |
+| `./torrserver.sh status` | состояние и адрес для TorrStream, Lampa |
+| `./torrserver.sh log` | журнал службы |
+| `./torrserver.sh uninstall` | удалить службу (данные остаются) |
+| `./torrserver.sh run` | запустить в терминале, без службы |
+
+`-p ПОРТ` — без вопроса, `-d КАТАЛОГ` — данные (по умолчанию
+`~/.local/share/torrserver-tizen`), `--system` — служба для всей системы через
+sudo вместо пользовательской. Пользовательская служба стартует при загрузке
+благодаря `loginctl enable-linger` (скрипт включает его сам).
+
+Вручную, без скрипта:
+
 ```
 tar xzf TorrServer-linux-x64.tar.gz
 ./TorrServer 8090 ~/ts-mono

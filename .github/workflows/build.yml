@@ -40,7 +40,7 @@ jobs:
           case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease";; esac
           gh release create "$GITHUB_REF_NAME" dist/TorrServer-Tizen.wgt dist/TorrServer-linux-x64.tar.gz dist/TorrServer-linux-arm64.tar.gz $PRE \
             --title "TorrServer для Samsung Tizen ${GITHUB_REF_NAME#v}" \
-            --notes "TorrServer на C# (MonoTorrent) с API TorrServer MatriX на порту 8090 — работает и на Tizen 5.5, где официальный TorrServer не запускается. TorrServer-Tizen.wgt ставится на телевизор через Apps2Samsung (Custom WGT) или Tizen Studio и запускается вместе с телевизором; в TorrStream — «Использовать TorrServer, установленный на этом устройстве». Архивы TorrServer-linux-*.tar.gz — та же служба для Linux, .NET ставить не нужно: tar xzf, затем ./TorrServer 8090. Подробнее — в README."
+            --notes "TorrServer на C# (MonoTorrent) с API TorrServer MatriX на порту 8090 — работает и на Tizen 5.5, где официальный TorrServer не запускается. TorrServer-Tizen.wgt ставится на телевизор через Apps2Samsung (Custom WGT) или Tizen Studio и запускается вместе с телевизором; в TorrStream — «Использовать TorrServer, установленный на этом устройстве». Архивы TorrServer-linux-*.tar.gz — та же служба для Linux, .NET ставить не нужно: tar xzf, затем ./torrserver.sh install (служба systemd, спросит порт) или ./TorrServer 8090. Одной командой: mkdir -p ~/torrserver && cd ~/torrserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/torrserver.sh -o torrserver.sh && bash torrserver.sh install — подробнее в README."
 
       - name: Артефакт
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}

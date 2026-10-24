@@ -7,7 +7,8 @@
 //   POST /cache {"action":"get","hash":…}   — куски в памяти, читатели
 //   POST /settings {"action": get|set|def}  — BTSets (TorrSettings.cs)
 //   GET  /download/<МБ>                     — нули для замера скорости
-//   GET  /version, /log, /                  — служебное: состояние, журнал, страница
+//   GET  /version, /log[?after=N]           — служебное: состояние, журнал
+//   GET  /                                  — страница отладки (WebPage.cs, web/index.html)
 // Файлы — с Range (перемотка в AVPlay), HEAD, keep-alive. CORS — для всех:
 // страница TorrStream лежит в пакете приложения (file://) и шлёт preflight;
 // Chrome 94+ спрашивает и про Private Network Access.
@@ -196,7 +197,7 @@ namespace TorrStreamTorrServer
         {
             string path = req.Path.TrimEnd('/');
             bool file = path.StartsWith("/play/") || ((path == "/stream" || path.StartsWith("/stream/")) && !req.Has("stat") && !req.Has("m3u") && !req.Has("preload"));
-            bool polling = req.Method == "OPTIONS" || path == "/echo" || path == "/version" || path == "/log" || path == "/cache" || path == "" ||
+            bool polling = req.Method == "OPTIONS" || path == "/echo" || path == "/version" || path == "/log" || path == "/cache" || path == "" || path == "/favicon.ico" ||
                 (path == "/torrents" && (req.BodyText.Contains("\"list\"") || req.BodyText.Contains("\"get\"")));
             if (file || (polling && ms < 1000)) return;
             string what = req.Method + " " + path;
@@ -325,8 +326,18 @@ namespace TorrStreamTorrServer
                     engine.WriteVersion(w, port);
                     return SendJson(s, req, w.ToString());
                 }
-                if (path == "/log") return SendText(s, req, 200, journal != null ? journal.Text() : "");
-                if (path == "" || path == "/index.html") return Send(s, req, 200, "text/html; charset=utf-8", StatusPage());
+                if (path == "/log")
+                {
+                    // ?after=N — страница отладки: строки после N-й, JSON
+                    if (req.Has("after") && journal != null)
+                    {
+                        long.TryParse(req.Q("after"), out long after);
+                        return SendJson(s, req, journal.Json(after));
+                    }
+                    return SendText(s, req, 200, journal != null ? journal.Text() : "");
+                }
+                if (path == "" || path == "/index.html") return Send(s, req, 200, "text/html; charset=utf-8", WebPage.Html);
+                if (path == "/favicon.ico") { WriteHead(s, req, 204, null, 0, null, req.KeepAlive); return true; }
                 if (path == "/torrents") return Torrents(s, req);
                 if (path == "/stream" || path.StartsWith("/stream/")) return StreamRoute(client, s, req);
                 if (path.StartsWith("/play/")) return Play(client, s, req, path);
@@ -409,7 +420,7 @@ namespace TorrStreamTorrServer
             var e = engine.Get(o.Str("hash"));
             if (e == null) return SendJson(s, req, "{}");
             var w = new JsonWriter();
-            engine.WriteCache(w, e);
+            engine.WriteCache(w, e, o.Bool("peers") ?? false);
             return SendJson(s, req, w.ToString());
         }
 
@@ -614,47 +625,42 @@ namespace TorrStreamTorrServer
         {
             try { return ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString(); } catch { return "?"; }
         }
-
-        string StatusPage()
-        {
-            var sb = new StringBuilder();
-            sb.Append("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">")
-              .Append("<title>TorrStream TorrServer</title><style>body{font:16px sans-serif;margin:16px;background:#111;color:#eee}")
-              .Append("td{padding:4px 8px;border-bottom:1px solid #333}a{color:#8cf}</style></head><body>")
-              .Append("<h2>TorrStream TorrServer</h2><p>").Append(WebUtility.HtmlEncode(TorrEngine.EchoVersion)).Append("</p>")
-              .Append("<p><a href=\"/version\">/version</a> · <a href=\"/log\">/log</a></p><table>");
-            foreach (var e in engine.List())
-            {
-                sb.Append("<tr><td>").Append(WebUtility.HtmlEncode(string.IsNullOrEmpty(e.Title) ? e.Hash : e.Title)).Append("</td><td>")
-                  .Append(e.Active ? (e.Manager.HasMetadata ? "открыт" : "метаданные…") : (e.InDb ? "в базе" : "закрыт"))
-                  .Append("</td><td>");
-                if (e.Active) sb.Append((e.Manager.Monitor.DownloadRate / 1024)).Append(" КБ/с, пиров ").Append(e.Manager.OpenConnections);
-                sb.Append("</td></tr>");
-            }
-            sb.Append("</table></body></html>");
-            return sb.ToString();
-        }
     }
 
     /// <summary>Последние строки журнала — GET /log (с телефона видно, что на ТВ)</summary>
     public class LogRing
     {
-        readonly Queue<string> lines = new Queue<string>();
+        readonly Queue<KeyValuePair<long, string>> lines = new Queue<KeyValuePair<long, string>>();
         readonly int max;
+        long seq;
         public LogRing(int max) { this.max = max; }
 
         public void Add(string line)
         {
             lock (lines)
             {
-                lines.Enqueue(DateTime.Now.ToString("HH:mm:ss ") + line);
+                lines.Enqueue(new KeyValuePair<long, string>(++seq, DateTime.Now.ToString("HH:mm:ss ") + line));
                 while (lines.Count > max) lines.Dequeue();
             }
         }
 
         public string Text()
         {
-            lock (lines) return string.Join("\n", lines);
+            lock (lines) return string.Join("\n", lines.Select(l => l.Value));
+        }
+
+        /// <summary>{"seq": последний номер, "lines": [строки после after]}</summary>
+        public string Json(long after)
+        {
+            var w = new JsonWriter();
+            lock (lines)
+            {
+                // Служба перезапускалась — номера пошли сначала: всё целиком
+                if (after > seq) after = 0;
+                w.Obj().Prop("seq", seq).Key("lines").Arr();
+                foreach (var l in lines) if (l.Key > after) w.Val(l.Value);
+            }
+            return w.EndArr().EndObj().ToString();
         }
     }
 }

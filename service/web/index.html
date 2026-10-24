@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TorrServer Tizen</title>
+<!--
+  Страница отладки службы (GET /, WebPage.cs). Только API TorrServer и служебное:
+  POST /torrents, /cache (с "peers":true), /settings; GET /version, /log?after=N.
+  ES5 без сборки — открывается и в браузере телевизора (Chrome 56+).
+-->
+<style>
+:root {
+  --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+  --text: #e6e8ec; --muted: #8b93a3; --accent: #5aa9ff;
+  --ok: #3fb950; --part: #d29922; --bad: #f85149; --win: #1f3a5c; --win2: #2b4f7a;
+  --empty: #262b35; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; }
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.chip b { color: var(--text); font-weight: 500; }
+.chip.err { border-color: var(--bad); color: var(--bad); }
+nav { display: flex; gap: 4px; margin-top: 8px; overflow-x: auto; }
+nav button { background: none; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 6px; font: inherit; cursor: pointer; white-space: nowrap; }
+nav button.on { background: var(--panel2); color: var(--text); }
+main { padding: 16px; max-width: 1280px; margin: 0 auto; }
+section { display: none; }
+section.on { display: block; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.card h2 { font-size: 14px; margin: 0 0 8px; font-weight: 600; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grow { flex: 1 1 200px; min-width: 0; }
+input, select, button.btn { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+input:focus, select:focus, button:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+button.btn { cursor: pointer; }
+button.btn:hover { border-color: var(--accent); }
+button.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+button.btn.small { padding: 2px 8px; font-size: 12px; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.err-text { color: var(--bad); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scroll-x { overflow-x: auto; }
+.title-cell { word-break: break-word; }
+.files { margin: 6px 0 2px; }
+.files td { padding: 3px 8px; font-size: 13px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.stat { background: var(--panel2); border-radius: 8px; padding: 8px 10px; }
+.stat .k { color: var(--muted); font-size: 12px; }
+.stat .v { font-size: 16px; font-variant-numeric: tabular-nums; }
+.bar { position: relative; height: 10px; background: var(--empty); border-radius: 5px; overflow: hidden; }
+.bar > i { position: absolute; top: 0; bottom: 0; left: 0; background: var(--ok); }
+.bar > i.win { background: var(--win2); }
+.bar > i.pos { width: 2px; background: var(--bad); }
+.reader { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-top: 8px; }
+.reader.primary { border-color: var(--accent); }
+.reader .name { font-weight: 500; word-break: break-all; }
+.badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--win2); color: #fff; margin-left: 6px; vertical-align: 1px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 6px 0; }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+canvas { display: block; width: 100%; image-rendering: pixelated; }
+#tip { position: fixed; pointer-events: none; background: #000d; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; display: none; z-index: 10; white-space: nowrap; }
+#log { background: #0a0c10; border: 1px solid var(--line); border-radius: 8px; height: calc(100vh - 230px); min-height: 300px; overflow: auto; padding: 8px 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+#log .l-err { color: var(--bad); }
+#log .l-warn { color: var(--part); }
+#log .l-http { color: var(--muted); }
+#log .l-peer { color: #7ee0c3; }
+#log mark { background: #5aa9ff55; color: inherit; }
+.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 16px; }
+.set-grid label { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--panel2); padding: 6px 10px; border-radius: 6px; }
+.set-grid label span { overflow: hidden; text-overflow: ellipsis; }
+.set-grid input[type=number], .set-grid input[type=text] { width: 120px; }
+.empty { color: var(--muted); padding: 16px 0; text-align: center; }
+@media (max-width: 640px) {
+  header { position: static; }
+  main { padding: 12px; }
+  .hide-sm { display: none; }
+  #log { height: calc(100vh - 260px); }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>TorrServer · Tizen</h1>
+    <div class="chips" id="ver"><span class="chip">загрузка…</span></div>
+  </div>
+  <nav id="nav">
+    <button data-tab="torrents" class="on">Торренты</button>
+    <button data-tab="cache">Кэш и читатели</button>
+    <button data-tab="log">Журнал</button>
+    <button data-tab="settings">Настройки</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ==================== Торренты ==================== -->
+  <section id="tab-torrents" class="on">
+    <div class="card">
+      <form id="add-form" class="row">
+        <input id="add-link" class="grow" placeholder="magnet:, хэш или ссылка на .torrent" autocomplete="off">
+        <label class="muted"><input type="checkbox" id="add-save"> в базу</label>
+        <button class="btn" type="submit">Добавить</button>
+      </form>
+      <div id="add-msg" class="muted" style="margin-top:6px"></div>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2>Торренты</h2>
+        <span class="muted" id="list-time"></span>
+      </div>
+      <div class="scroll-x"><table id="list">
+        <thead><tr><th>Название</th><th>Состояние</th><th class="num">Размер</th><th class="num">Скорость</th><th class="num hide-sm">Пиры</th><th class="num hide-sm">В памяти</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ==================== Кэш ==================== -->
+  <section id="tab-cache">
+    <div class="card">
+      <div class="row">
+        <select id="cache-hash" class="grow"></select>
+        <label class="muted"><input type="checkbox" id="cache-auto" checked> обновлять</label>
+        <select id="cache-scope" title="Что показывать на карте">
+          <option value="file">Файл читателя</option>
+          <option value="all">Весь торрент</option>
+        </select>
+      </div>
+    </div>
+    <div id="cache-body"><div class="empty">Нет открытых торрентов — начните просмотр, и здесь появится кэш.</div></div>
+  </section>
+
+  <!-- ==================== Журнал ==================== -->
+  <section id="tab-log">
+    <div class="card">
+      <div class="row">
+        <input id="log-filter" class="grow" placeholder="Фильтр (подстрока или /регулярка/)" autocomplete="off">
+        <label class="muted"><input type="checkbox" id="log-http" checked> HTTP</label>
+        <label class="muted"><input type="checkbox" id="log-follow" checked> следить</label>
+        <button class="btn" id="log-pause" type="button">Пауза</button>
+        <button class="btn" id="log-save" type="button">Скачать</button>
+        <button class="btn" id="log-clear" type="button">Очистить экран</button>
+      </div>
+    </div>
+    <div id="log"></div>
+    <div class="muted" id="log-status" style="margin-top:6px"></div>
+  </section>
+
+  <!-- ==================== Настройки ==================== -->
+  <section id="tab-settings">
+    <div class="card">
+      <h2>Настройки (BTSets)</h2>
+      <p class="muted" style="margin-top:0">Кэш — в памяти, на торрент. «Вперёд» — доля кэша перед позицией читателя (ReaderReadAHead).</p>
+      <form id="set-form"><div class="set-grid" id="set-grid"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" type="submit">Сохранить</button>
+          <button class="btn danger" type="button" id="set-def">По умолчанию</button>
+          <span class="muted" id="set-msg"></span>
+        </div>
+      </form>
+    </div>
+  </section>
+</main>
+<div id="tip"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ==================== утилиты ====================
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function bytes(n) {
+    n = +n || 0;
+    var u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'], i = 0;
+    while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 2 : n < 100 ? 1 : 0) : n) + ' ' + u[i];
+  }
+  function speed(n) { return bytes(n) + '/с'; }
+  function pct(a, b) { return b > 0 ? Math.max(0, Math.min(100, a * 100 / b)) : 0; }
+  function baseName(p) { p = String(p || ''); return p.substring(p.lastIndexOf('/') + 1); }
+  function duration(s) {
+    s = Math.floor(s || 0);
+    var d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+    return (d ? d + ' д ' : '') + (d || h ? h + ' ч ' : '') + m + ' мин';
+  }
+
+  function request(method, url, body, cb) {
+    var x = new XMLHttpRequest();
+    x.open(method, url, true);
+    x.timeout = 15000;
+    if (body != null) x.setRequestHeader('Content-Type', 'application/json');
+    x.onload = function () {
+      var data = x.responseText;
+      var type = x.getResponseHeader('Content-Type') || '';
+      if (type.indexOf('json') >= 0) { try { data = JSON.parse(data); } catch (e) { } }
+      cb(x.status >= 200 && x.status < 300 ? null : (x.status + ' ' + (x.responseText || x.statusText)), data);
+    };
+    x.onerror = function () { cb('нет связи со службой', null); };
+    x.ontimeout = function () { cb('служба не ответила за 15 с', null); };
+    x.send(body != null ? JSON.stringify(body) : null);
+  }
+  function post(url, body, cb) { request('POST', url, body, cb); }
+
+  // ==================== вкладки ====================
+  var tab = 'torrents';
+  var navButtons = $('nav').getElementsByTagName('button');
+  function showTab(name, hash) {
+    tab = name;
+    for (var i = 0; i < navButtons.length; i++) navButtons[i].className = navButtons[i].getAttribute('data-tab') === name ? 'on' : '';
+    var secs = document.getElementsByTagName('section');
+    for (var j = 0; j < secs.length; j++) secs[j].className = secs[j].id === 'tab-' + name ? 'on' : '';
+    var h = '#' + name + (hash ? '/' + hash : '');
+    if (location.hash !== h) history.replaceState(null, '', h);
+    tick(true);
+  }
+  for (var n = 0; n < navButtons.length; n++) {
+    navButtons[n].onclick = function () { showTab(this.getAttribute('data-tab'), this.getAttribute('data-tab') === 'cache' ? cacheHash : null); };
+  }
+
+  // ==================== версия ====================
+  function loadVersion() {
+    request('GET', '/version', null, function (err, v) {
+      var box = $('ver');
+      if (err || !v || typeof v !== 'object') { box.innerHTML = '<span class="chip err">' + esc(err || 'нет ответа') + '</span>'; return; }
+      var chips = [
+        ['служба', v.service], ['движок', v.engine], ['', v.runtime + ' · ' + v.arch],
+        ['память', v.memory_mb + ' МБ кэша · GC ' + v.gc_mb + ' МБ'], ['кэш на торрент', v.cache_mb + ' МБ'],
+        ['торрентов', v.torrents + ' (открыто ' + v.active + ')'], ['DHT', v.dht || '—'],
+        ['порт пиров', v.peers_port], ['работает', duration(v.uptime_s)]
+      ];
+      var html = '';
+      for (var i = 0; i < chips.length; i++) html += '<span class="chip">' + (chips[i][0] ? esc(chips[i][0]) + ' ' : '') + '<b>' + esc(chips[i][1]) + '</b></span>';
+      if (!v.evict) html += '<span class="chip err" title="Вытесненные куски не скачаются заново при перемотке назад">evict недоступен</span>';
+      if (v.error) html += '<span class="chip err">' + esc(v.error) + '</span>';
+      box.innerHTML = html;
+    });
+  }
+
+  // ==================== торренты ====================
+  var torrents = [];
+  var openFiles = {};   // hash → показан список файлов
+
+  function statusOf(t) {
+    if (t.stat_string) return t.stat_string;
+    return ['Добавлен', 'Получение инфо', 'Предзагрузка', 'Работает', 'Закрыт', 'В базе'][t.stat] || String(t.stat);
+  }
+  function filesOf(t) {
+    if (t.file_stats && t.file_stats.length) return t.file_stats;
+    try { var d = JSON.parse(t.data || ''); if (d && d.TorrServer && d.TorrServer.Files) return d.TorrServer.Files; } catch (e) { }
+    return [];
+  }
+
+  function loadTorrents() {
+    post('/torrents', { action: 'list' }, function (err, list) {
+      if (err) { $('list-time').innerHTML = '<span class="err-text">' + esc(err) + '</span>'; return; }
+      torrents = list || [];
+      $('list-time').textContent = new Date().toLocaleTimeString();
+      renderTorrents();
+      fillCacheSelect();
+    });
+  }
+
+  // Строки обновляются по ячейкам: замена всей таблицы раз в секунду съедала
+  // клики (кнопка исчезала между нажатием и отпусканием)
+  var torrentsLayout = '';
+  function torrentCells(t) {
+    var active = t.download_speed !== undefined;
+    return [
+      '<a href="#" data-act="files">' + esc(t.title || t.name || t.hash) + '</a><div class="mono muted">' + esc(t.hash) + '</div>',
+      esc(statusOf(t)),
+      t.torrent_size ? bytes(t.torrent_size) : '—',
+      active ? '↓ ' + speed(t.download_speed) + '<br><span class="muted">↑ ' + speed(t.upload_speed) + '</span>' : '—',
+      active ? t.active_peers + ' / ' + t.total_peers + '<br><span class="muted">сидов ' + t.connected_seeders + '</span>' : '—',
+      active ? bytes(t.loaded_size) : '—',
+      (active ? '<button class="btn small" data-act="cache">Кэш</button> <button class="btn small" data-act="drop" title="Закрыть торрент, кэш освободится">Закрыть</button> ' : '') +
+        '<button class="btn small danger" data-act="rem">Удалить</button>'
+    ];
+  }
+  var CELL_CLASS = ['title-cell', '', 'num', 'num', 'num hide-sm', 'num hide-sm', 'num'];
+
+  function renderTorrents() {
+    var tb = $('list').tBodies[0];
+    if (!torrents.length) { torrentsLayout = ''; tb.innerHTML = '<tr><td colspan="7" class="empty">Торрентов нет</td></tr>'; return; }
+    var layout = [];
+    for (var i = 0; i < torrents.length; i++) layout.push(torrents[i].hash + (openFiles[torrents[i].hash] ? '+' + filesOf(torrents[i]).length : ''));
+    layout = layout.join(',');
+    if (layout !== torrentsLayout) {
+      torrentsLayout = layout;
+      var html = '';
+      for (var j = 0; j < torrents.length; j++) {
+        var t = torrents[j], cells = torrentCells(t);
+        html += '<tr data-hash="' + esc(t.hash) + '">';
+        for (var c = 0; c < cells.length; c++) html += '<td class="' + CELL_CLASS[c] + '">' + cells[c] + '</td>';
+        html += '</tr>';
+        if (openFiles[t.hash]) html += '<tr data-files="' + esc(t.hash) + '"><td colspan="7">' + filesTable(t) + '</td></tr>';
+      }
+      tb.innerHTML = html;
+      return;
+    }
+    var rows = tb.rows, k = 0;
+    for (var r = 0; r < rows.length; r++) {
+      if (!rows[r].getAttribute('data-hash')) continue;
+      var tc = torrentCells(torrents[k++]);
+      for (var x = 0; x < tc.length; x++) if (rows[r].cells[x].innerHTML !== tc[x]) rows[r].cells[x].innerHTML = tc[x];
+    }
+  }
+
+  function filesTable(t) {
+    var files = filesOf(t);
+    if (!files.length) return '<div class="muted">Список файлов ещё не получен (нет метаданных)</div>';
+    var html = '<div class="row" style="justify-content:space-between"><span class="muted">Файлов: ' + files.length +
+      ' — порядок и номера как у TorrServer (по имени, числа как числа)</span>' +
+      '<a href="/stream/' + encodeURIComponent((t.title || 'playlist') + '.m3u') + '?link=' + t.hash + '&m3u">плейлист M3U</a></div>' +
+      '<table class="files"><tbody>';
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i], name = baseName(f.path);
+      var url = '/stream/' + encodeURIComponent(name) + '?link=' + t.hash + '&index=' + f.id + '&play';
+      html += '<tr><td class="num muted">' + f.id + '</td><td class="title-cell">' + esc(f.path) + '</td><td class="num">' + bytes(f.length) + '</td>' +
+        '<td class="num"><a href="' + url + '" target="_blank">открыть</a> · <a href="#" data-act="preload" data-id="' + f.id + '">предзагрузка</a></td></tr>';
+    }
+    return html + '</tbody></table>';
+  }
+
+  $('list').onclick = function (ev) {
+    var el = ev.target;
+    while (el && el !== this && !el.getAttribute('data-act')) el = el.parentNode;
+    if (!el || el === this) return;
+    ev.preventDefault();
+    var row = el;
+    while (row && row.tagName !== 'TR') row = row.parentNode;
+    var hash = row && (row.getAttribute('data-hash') || row.getAttribute('data-files'));
+    if (!hash) return;
+    var act = el.getAttribute('data-act');
+    if (act === 'files') { openFiles[hash] = !openFiles[hash]; renderTorrents(); }
+    else if (act === 'cache') { cacheHash = hash; fillCacheSelect(); showTab('cache', hash); }
+    else if (act === 'drop') post('/torrents', { action: 'drop', hash: hash }, function () { loadTorrents(); });
+    else if (act === 'rem') { if (confirm('Удалить торрент из списка и базы?')) post('/torrents', { action: 'rem', hash: hash }, function () { loadTorrents(); }); }
+    else if (act === 'preload') {
+      el.textContent = 'идёт…';
+      request('GET', '/stream?link=' + hash + '&index=' + el.getAttribute('data-id') + '&preload', null, function (err) {
+        el.textContent = err ? 'ошибка' : 'готово';
+      });
+    }
+  };
+
+  $('add-form').onsubmit = function (ev) {
+    ev.preventDefault();
+    var link = $('add-link').value.trim();
+    if (!link) return;
+    $('add-msg').textContent = 'Добавляю…';
+    post('/torrents', { action: 'add', link: link, save_to_db: $('add-save').checked }, function (err, t) {
+      $('add-msg').innerHTML = err ? '<span class="err-text">' + esc(err) + '</span>' : 'Добавлен: ' + esc((t && (t.title || t.hash)) || '');
+      if (!err) $('add-link').value = '';
+      loadTorrents();
+    });
+  };
+
+  // ==================== кэш ====================
+  var cacheHash = null, cacheData = null, cacheBusy = false, peersTick = 0, lastPeers = null;
+
+  function fillCacheSelect() {
+    var sel = $('cache-hash'), active = [], html = '';
+    for (var i = 0; i < torrents.length; i++) if (torrents[i].download_speed !== undefined) active.push(torrents[i]);
+    if (!cacheHash && active.length) cacheHash = active[0].hash;
+    var found = false;
+    for (var j = 0; j < active.length; j++) {
+      if (active[j].hash === cacheHash) found = true;
+      html += '<option value="' + esc(active[j].hash) + '"' + (active[j].hash === cacheHash ? ' selected' : '') + '>' + esc(active[j].title || active[j].hash) + '</option>';
+    }
+    if (cacheHash && !found) html = '<option value="' + esc(cacheHash) + '" selected>' + esc(cacheHash) + ' (закрыт)</option>' + html;
+    if (!html) html = '<option value="">— нет открытых торрентов —</option>';
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+  }
+  $('cache-hash').onchange = function () { cacheHash = this.value || null; cacheData = null; lastPeers = null; cacheSkeletonHash = null; showTab('cache', cacheHash); };
+  $('cache-scope').onchange = function () { if (cacheData) renderCache(); };
+
+  function loadCache() {
+    if (!cacheHash || cacheBusy) { if (!cacheHash) cacheSkeletonHash = null; if (!cacheHash) $('cache-body').innerHTML = '<div class="empty">Нет открытых торрентов — начните просмотр, и здесь появится кэш.</div>'; return; }
+    cacheBusy = true;
+    var withPeers = (peersTick++ % 3) === 0;   // пиры — раз в 3 обновления
+    post('/cache', { action: 'get', hash: cacheHash, peers: withPeers }, function (err, c) {
+      cacheBusy = false;
+      if (err) { cacheSkeletonHash = null; $('cache-body').innerHTML = '<div class="card err-text">' + esc(err) + '</div>'; return; }
+      if (!c || !c.Hash) { cacheSkeletonHash = null; $('cache-body').innerHTML = '<div class="empty">Торрент не найден</div>'; return; }
+      if (c.Peers) lastPeers = c.Peers;
+      cacheData = c;
+      renderCache();
+    });
+  }
+
+  function primaryReader(c) {
+    var rs = c.Readers || [];
+    for (var i = 0; i < rs.length; i++) if (rs[i].Primary) return rs[i];
+    return rs[0] || null;
+  }
+
+  // Каркас вкладки строится один раз на торрент, дальше обновляются только
+  // блоки и canvas: перерисовка целиком раз в секунду мигала и сбрасывала прокрутку
+  var cacheSkeletonHash = null;
+  function cacheSkeleton(hash) {
+    if (cacheSkeletonHash === hash && $('c-sum')) return;
+    cacheSkeletonHash = hash;
+    $('cache-body').innerHTML =
+      '<div class="card" id="c-sum"></div>' +
+      '<div class="card"><h2>Читатели</h2><div id="c-readers"></div></div>' +
+      '<div class="card"><h2>Карта кусков</h2>' +
+      '<div class="legend"><span><i style="background:var(--empty)"></i>нет в кэше</span><span><i style="background:var(--part)"></i>качается (заполнение снизу)</span>' +
+      '<span><i style="background:var(--ok)"></i>готов</span><span><i style="background:var(--win2)"></i>окно читателя, ещё нет</span>' +
+      '<span><i style="background:var(--bad)"></i>позиция читателя</span></div>' +
+      '<div class="muted" id="strip-title" style="margin-top:6px"></div><canvas id="strip" height="28"></canvas>' +
+      '<div class="muted" id="map-title" style="margin-top:10px"></div><canvas id="map"></canvas></div>' +
+      '<div class="card"><h2>Пиры</h2><div id="c-peers"></div></div>';
+  }
+  function setHtml(id, html) { var el = $(id); if (el && el.innerHTML !== html) el.innerHTML = html; }
+
+  function renderCache() {
+    var c = cacheData, t = c.Torrent || {}, pl = c.PiecesLength;
+    var readers = c.Readers || [];
+    var completed = 0, partial = 0;
+    for (var k in c.Pieces) { if (c.Pieces[k].Completed) completed++; else partial++; }
+    cacheSkeleton(c.Hash);
+
+    setHtml('c-sum', '<div class="row" style="justify-content:space-between"><h2>' + esc(t.title || c.Hash) + '</h2>' +
+      '<span class="muted">' + esc((c.Diag && c.Diag.State) || t.stat_string || '') + '</span></div>' +
+      (c.Diag && c.Diag.Error ? '<div class="err-text">' + esc(c.Diag.Error) + '</div>' : '') +
+      '<div class="stats">' +
+        stat('Скорость', '↓ ' + speed(t.download_speed) + ' · ↑ ' + speed(t.upload_speed)) +
+        stat('Пиры', (t.active_peers || 0) + ' подключено · ' + (t.pending_peers || 0) + ' ждут · сидов ' + (t.connected_seeders || 0)) +
+        stat('Кэш', bytes(c.Filled) + ' из ' + bytes(c.Capacity) + ' (' + pct(c.Filled, c.Capacity).toFixed(0) + '%)') +
+        stat('Кусков в памяти', completed + ' готово · ' + partial + ' качается') +
+        stat('Кусок', bytes(pl) + ' · всего ' + c.PiecesCount) +
+        stat('Окно вперёд', c.ReadAheadPieces + ' кусков (' + bytes(c.ReadAheadPieces * pl) + ')' + ' · назад ' + c.BehindPieces) +
+      '</div><div class="bar" style="margin-top:10px" title="Заполнение кэша"><i style="width:' + pct(c.Filled, c.Capacity) + '%"></i></div>');
+
+    var rh = readers.length ? '' : '<div class="muted">Сейчас никто не читает — окна нет, кэш только хранит скачанное.</div>';
+    for (var i = 0; i < readers.length; i++) rh += readerCard(readers[i], c);
+    setHtml('c-readers', rh);
+    setHtml('c-peers', peersTable(lastPeers) + diagBlock(c.Diag));
+    drawStrip(c);
+    drawMap(c);
+  }
+
+  function stat(k, v) { return '<div class="stat"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
+
+  function readerCard(r, c) {
+    var pl = c.PiecesLength;
+    var posPct = pct(r.Pos, r.FileLength);
+    var winPct = pct(r.Window, r.FileLength), aheadPct = pct(r.Ahead, r.FileLength);
+    var ready = r.Window > 0 ? pct(r.Ahead, r.Window) : 100;
+    return '<div class="reader' + (r.Primary ? ' primary' : '') + '">' +
+      '<div class="name">' + esc(baseName(r.Path)) + '<span class="muted"> · файл ' + r.FileId + '</span>' + (r.Primary ? '<span class="badge">главный</span>' : '') + '</div>' +
+      '<div class="stats" style="margin-top:8px">' +
+        stat('Позиция', bytes(r.Pos) + ' из ' + bytes(r.FileLength) + ' (' + posPct.toFixed(1) + '%)') +
+        stat('Скачано вперёд подряд', bytes(r.Ahead) + ' из ' + bytes(r.Window) + ' (' + ready.toFixed(0) + '%)') +
+        stat('Окно, кусков', r.WindowReady + ' из ' + r.WindowPieces + ' готово') +
+        stat('Кусок читателя', r.Reader + ' (окно ' + r.Start + '–' + r.End + ')') +
+      '</div>' +
+      '<div class="muted" style="margin:8px 0 4px;font-size:12px">Файл целиком: позиция, окно и скачанное вперёд</div>' +
+      '<div class="bar"><i class="win" style="left:' + posPct + '%;width:' + winPct + '%"></i><i style="left:' + posPct + '%;width:' + aheadPct + '%"></i><i class="pos" style="left:' + posPct + '%"></i></div>' +
+      '<div class="muted" style="margin:8px 0 4px;font-size:12px">Окно вперёд: ' + bytes(r.Ahead) + ' готово подряд из ' + bytes(r.Window) + '</div>' +
+      '<div class="bar"><i style="width:' + ready + '%"></i></div>' +
+      '</div>';
+  }
+
+  function peersTable(peers) {
+    if (!peers) return '<div class="muted">Загрузка…</div>';
+    if (!peers.length) return '<div class="muted">Нет подключённых пиров</div>';
+    var html = '<div class="scroll-x"><table><thead><tr><th>Адрес</th><th class="hide-sm">Клиент</th><th class="num">↓</th><th class="num">↑</th><th class="num hide-sm">Получено</th><th class="num">Есть</th><th class="num hide-sm">Запросов</th><th class="hide-sm">Флаги</th></tr></thead><tbody>';
+    for (var i = 0; i < peers.length && i < 80; i++) {
+      var p = peers[i], flags = [];
+      if (p.Seeder) flags.push('сид');
+      if (p.Incoming) flags.push('входящий');
+      if (p.Choking) flags.push('choke');
+      if (p.Encryption && p.Encryption !== 'None' && p.Encryption !== 'PlainText') flags.push(p.Encryption);
+      html += '<tr><td class="mono">' + esc(p.Address) + '</td><td class="hide-sm">' + esc(p.Client) + '</td>' +
+        '<td class="num">' + speed(p.Down) + '</td><td class="num">' + speed(p.Up) + '</td><td class="num hide-sm">' + bytes(p.Received) + '</td>' +
+        '<td class="num">' + (+p.Have || 0).toFixed(0) + '%</td><td class="num hide-sm">' + p.Requests + '</td><td class="hide-sm muted">' + esc(flags.join(', ')) + '</td></tr>';
+    }
+    return html + '</tbody></table></div>';
+  }
+
+  function diagBlock(d) {
+    if (!d) return '';
+    var f = d.Found || {}, html = '<div class="muted" style="margin-top:10px;font-size:12px">Найдено пиров: трекеры ' + f.tracker + ', DHT ' + f.dht + ', PEX ' + f.pex + ', локальная сеть ' + f.lpd;
+    var fails = [];
+    for (var k in d.Fails) fails.push(k + ' ' + d.Fails[k]);
+    if (fails.length) html += '<br>Не подключились: ' + esc(fails.join(', '));
+    var tr = [];
+    for (var u in d.Trackers) tr.push(esc(u) + ' — ' + esc(d.Trackers[u]));
+    html += '<br>Трекеры: ' + (tr.length ? tr.join('<br>') : 'ещё не ответили');
+    return html + '</div>';
+  }
+
+  // Состояние куска: 0 — нет, 1 — качается (доля в frac), 2 — готов
+  function pieceState(c, id) {
+    var p = c.Pieces[id];
+    if (!p) return { s: 0, frac: 0 };
+    if (p.Completed) return { s: 2, frac: 1 };
+    return { s: 1, frac: p.Length ? p.Size / p.Length : 0 };
+  }
+  function inWindow(c, id) {
+    var rs = c.Readers || [];
+    for (var i = 0; i < rs.length; i++) if (id >= rs[i].Start && id <= rs[i].End) return true;
+    return false;
+  }
+  function isReaderPiece(c, id) {
+    var rs = c.Readers || [];
+    for (var i = 0; i < rs.length; i++) if (rs[i].Reader === id) return true;
+    return false;
+  }
+  var COLORS = { empty: '#262b35', part: '#d29922', ok: '#3fb950', win: '#1f3a5c', reader: '#f85149', gap: '#171a21' };
+
+  function setupCanvas(cv, h) {
+    var w = cv.clientWidth || cv.parentNode.clientWidth;
+    var dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.style.height = h + 'px';
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx: ctx, w: w };
+  }
+
+  function drawCell(ctx, c, id, x, y, cw, ch, gap) {
+    var st = pieceState(c, id);
+    ctx.fillStyle = inWindow(c, id) && st.s !== 2 ? COLORS.win : COLORS.empty;
+    ctx.fillRect(x, y, cw - gap, ch - gap);
+    if (st.s === 2) { ctx.fillStyle = COLORS.ok; ctx.fillRect(x, y, cw - gap, ch - gap); }
+    else if (st.s === 1) {
+      ctx.fillStyle = COLORS.part;
+      var fh = Math.max(1, (ch - gap) * st.frac);
+      ctx.fillRect(x, y + (ch - gap) - fh, cw - gap, fh);
+    }
+    if (isReaderPiece(c, id)) {
+      ctx.strokeStyle = COLORS.reader; ctx.lineWidth = Math.max(1, Math.min(3, cw / 4));
+      ctx.strokeRect(x + ctx.lineWidth / 2, y + ctx.lineWidth / 2, cw - gap - ctx.lineWidth, ch - gap - ctx.lineWidth);
+      if (cw < 6) { ctx.fillStyle = COLORS.reader; ctx.fillRect(x, y, cw - gap, ch - gap); }
+    }
+  }
+
+  // Полоса вокруг главного читателя: что держим позади и окно вперёд, крупно
+  var stripRange = null, mapGeom = null;
+  function drawStrip(c) {
+    var cv = $('strip'), r = primaryReader(c);
+    if (!cv) return;
+    if (!r) { cv.style.display = 'none'; $('strip-title').textContent = ''; stripRange = null; return; }
+    var from = Math.max(0, r.Reader - Math.min(c.BehindPieces, 20)), to = Math.min(c.PiecesCount - 1, r.End + 4);
+    if (to - from > 300) to = from + 300;
+    stripRange = { from: from, to: to };
+    $('strip-title').textContent = 'Около главного читателя: куски ' + from + '–' + to + ' (позиция ' + r.Reader + ', окно до ' + r.End + ')';
+    var g = setupCanvas(cv, 28), n = to - from + 1, cw = g.w / n;
+    for (var i = 0; i < n; i++) drawCell(g.ctx, c, from + i, i * cw, 0, cw, 28, cw > 4 ? 1 : 0);
+  }
+
+  function mapRange(c) {
+    var r = primaryReader(c), pl = c.PiecesLength;
+    if ($('cache-scope').value === 'file' && r && pl) {
+      return { from: Math.floor(r.FileOffset / pl), to: Math.floor((r.FileOffset + Math.max(1, r.FileLength) - 1) / pl), label: 'Файл «' + baseName(r.Path) + '»' };
+    }
+    return { from: 0, to: Math.max(0, c.PiecesCount - 1), label: 'Весь торрент' };
+  }
+
+  function drawMap(c) {
+    var cv = $('map');
+    if (!cv || !c.PiecesCount) { if (cv) cv.style.display = 'none'; return; }
+    var rg = mapRange(c), n = rg.to - rg.from + 1;
+    var w = cv.clientWidth || cv.parentNode.clientWidth;
+    var size = Math.max(3, Math.min(18, Math.floor(Math.sqrt(w * 320 / n))));
+    var cols = Math.max(1, Math.floor(w / size)), rows = Math.ceil(n / cols);
+    var g = setupCanvas(cv, rows * size), gap = size >= 6 ? 1 : 0;
+    for (var i = 0; i < n; i++) drawCell(g.ctx, c, rg.from + i, (i % cols) * size, Math.floor(i / cols) * size, size, size, gap);
+    mapGeom = { from: rg.from, n: n, cols: cols, size: size };
+    $('map-title').textContent = rg.label + ': куски ' + rg.from + '–' + rg.to + ' (' + n + ')';
+  }
+
+  function pieceTip(id) {
+    var c = cacheData, st = pieceState(c, id), p = c.Pieces[id];
+    var s = 'Кусок ' + id + ' · ' + (st.s === 2 ? 'готов' : st.s === 1 ? 'качается ' + Math.round(st.frac * 100) + '%' : 'нет в кэше');
+    if (p && p.Priority) s += ' · приоритет ' + p.Priority;
+    if (isReaderPiece(c, id)) s += ' · позиция читателя';
+    else if (inWindow(c, id)) s += ' · в окне';
+    return s;
+  }
+  function showTip(ev, text) { var t = $('tip'); t.textContent = text; t.style.display = 'block'; t.style.left = (ev.clientX + 12) + 'px'; t.style.top = (ev.clientY + 12) + 'px'; }
+  document.addEventListener('mousemove', function (ev) {
+    var el = ev.target, tip = $('tip');
+    if (!cacheData || !el || (el.id !== 'map' && el.id !== 'strip')) { tip.style.display = 'none'; return; }
+    var rect = el.getBoundingClientRect(), x = ev.clientX - rect.left, y = ev.clientY - rect.top, id;
+    if (el.id === 'map' && mapGeom) {
+      var col = Math.floor(x / mapGeom.size), row = Math.floor(y / mapGeom.size), i = row * mapGeom.cols + col;
+      if (col >= mapGeom.cols || i >= mapGeom.n) { tip.style.display = 'none'; return; }
+      id = mapGeom.from + i;
+    } else if (stripRange) {
+      id = stripRange.from + Math.floor(x / (rect.width / (stripRange.to - stripRange.from + 1)));
+    } else return;
+    showTip(ev, pieceTip(id));
+  });
+  window.addEventListener('resize', function () { if (cacheData && tab === 'cache') { drawStrip(cacheData); drawMap(cacheData); } });
+
+  // ==================== журнал ====================
+  var logSeq = 0, logLines = [], logPaused = false, logBusy = false;
+  var MAX_LOG = 5000;
+
+  function logClass(s) {
+    if (/найдено пиров/.test(s)) return 'l-peer';   // сводка раз в 15–30 с, «Failed» там — счётчики
+    if (/ошибк|error|exception|не удалось|прерван|timeout|fail/i.test(s)) return 'l-err';
+    if (/медленн|ждал|нет пиров|без метаданных|не подключились/i.test(s)) return 'l-warn';
+    if (/^\d\d:\d\d:\d\d HTTP /.test(s)) return 'l-http';
+    if (/пиров|DHT|трекер/i.test(s)) return 'l-peer';
+    return '';
+  }
+  function logMatcher() {
+    var q = $('log-filter').value;
+    if (!q) return null;
+    var m = q.match(/^\/(.+)\/([a-z]*)$/);
+    if (m) { try { return new RegExp(m[1], m[2].indexOf('i') >= 0 ? m[2] : m[2] + 'i'); } catch (e) { } }
+    return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  }
+  function lineHtml(s, re) {
+    var cls = logClass(s), body = esc(s);
+    if (re) {
+      re.lastIndex = 0;
+      var m = s.match(re);
+      if (m && m[0]) body = esc(s.substring(0, m.index)) + '<mark>' + esc(m[0]) + '</mark>' + esc(s.substring(m.index + m[0].length));
+    }
+    return '<div' + (cls ? ' class="' + cls + '"' : '') + '>' + body + '</div>';
+  }
+  function visible(s, re) {
+    if (!$('log-http').checked && /^\d\d:\d\d:\d\d HTTP /.test(s)) return false;
+    return !re || re.test(s);
+  }
+  function renderLog() {
+    var re = logMatcher(), html = '';
+    for (var i = 0; i < logLines.length; i++) if (visible(logLines[i], re)) html += lineHtml(logLines[i], re);
+    var box = $('log');
+    box.innerHTML = html || '<div class="muted">Пусто</div>';
+    if ($('log-follow').checked) box.scrollTop = box.scrollHeight;
+  }
+  function appendLog(lines) {
+    var re = logMatcher(), box = $('log'), html = '';
+    var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    for (var i = 0; i < lines.length; i++) if (visible(lines[i], re)) html += lineHtml(lines[i], re);
+    if (html) {
+      if (box.firstChild && box.firstChild.className === 'muted') box.innerHTML = '';
+      box.insertAdjacentHTML('beforeend', html);
+      while (box.childNodes.length > MAX_LOG) box.removeChild(box.firstChild);
+    }
+    if ($('log-follow').checked && atBottom) box.scrollTop = box.scrollHeight;
+  }
+  function loadLog() {
+    if (logPaused || logBusy) return;
+    logBusy = true;
+    request('GET', '/log?after=' + logSeq, null, function (err, d) {
+      logBusy = false;
+      if (err || !d || typeof d !== 'object') { $('log-status').innerHTML = '<span class="err-text">' + esc(err || 'нет ответа') + '</span>'; return; }
+      var restarted = d.seq < logSeq;
+      logSeq = d.seq;
+      if (restarted) { logLines = []; }
+      logLines = logLines.concat(d.lines);
+      if (logLines.length > MAX_LOG) logLines = logLines.slice(logLines.length - MAX_LOG);
+      if (restarted) renderLog(); else appendLog(d.lines);
+      $('log-status').textContent = 'Строк: ' + logLines.length + ' · обновлено ' + new Date().toLocaleTimeString() + ' · служба хранит последние 2000';
+    });
+  }
+  $('log-filter').oninput = renderLog;
+  $('log-http').onchange = renderLog;
+  $('log-pause').onclick = function () { logPaused = !logPaused; this.textContent = logPaused ? 'Продолжить' : 'Пауза'; if (!logPaused) loadLog(); };
+  $('log-clear').onclick = function () { logLines = []; renderLog(); };
+  $('log-save').onclick = function () {
+    var blob = new Blob([logLines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'torrserver-tizen-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.log';
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.parentNode.removeChild(a); }, 1000);
+  };
+
+  // ==================== настройки ====================
+  var settings = null;
+  var SET_LABELS = {
+    CacheSize: 'Кэш на торрент, МБ', ReaderReadAHead: 'Вперёд от читателя, %', PreloadCache: 'Предзагрузка, % кэша',
+    ConnectionsLimit: 'Пиров на торрент', TorrentDisconnectTimeout: 'Закрыть без читателей, с', PeersListenPort: 'Порт пиров',
+    EnableDHT: 'DHT', EnableUPNP: 'UPnP', DownloadRateLimit: 'Ограничение ↓, КБ/с', UploadRateLimit: 'Ограничение ↑, КБ/с',
+    RetrackersMode: 'Ретрекеры (0 — нет, 1 — добавлять)'
+  };
+  function loadSettings() {
+    post('/settings', { action: 'get' }, function (err, s) {
+      if (err || !s) { $('set-msg').innerHTML = '<span class="err-text">' + esc(err || 'нет ответа') + '</span>'; return; }
+      settings = s;
+      var keys = Object.keys(s).sort(function (a, b) { return (SET_LABELS[a] ? 0 : 1) - (SET_LABELS[b] ? 0 : 1) || (a < b ? -1 : 1); });
+      var html = '';
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i], v = s[k], label = SET_LABELS[k] || k, input;
+        if (typeof v === 'boolean') input = '<input type="checkbox" data-k="' + k + '"' + (v ? ' checked' : '') + '>';
+        else if (typeof v === 'number') input = '<input type="number" data-k="' + k + '" value="' + (k === 'CacheSize' ? Math.round(v / 1048576) : v) + '">';
+        else if (v === null || typeof v === 'string') input = '<input type="text" data-k="' + k + '" value="' + esc(v == null ? '' : v) + '">';
+        else continue;
+        html += '<label title="' + esc(k) + '"><span>' + esc(label) + '</span>' + input + '</label>';
+      }
+      $('set-grid').innerHTML = html;
+    });
+  }
+  $('set-form').onsubmit = function (ev) {
+    ev.preventDefault();
+    var inputs = $('set-grid').getElementsByTagName('input'), sets = {};
+    for (var k in settings) sets[k] = settings[k];
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i], key = el.getAttribute('data-k');
+      if (el.type === 'checkbox') sets[key] = el.checked;
+      else if (el.type === 'number') sets[key] = key === 'CacheSize' ? Math.round(+el.value * 1048576) : +el.value;
+      else sets[key] = el.value;
+    }
+    post('/settings', { action: 'set', sets: sets }, function (err) {
+      $('set-msg').innerHTML = err ? '<span class="err-text">' + esc(err) + '</span>' : 'Сохранено';
+      loadSettings(); loadVersion();
+    });
+  };
+  $('set-def').onclick = function () {
+    if (!confirm('Вернуть настройки по умолчанию?')) return;
+    post('/settings', { action: 'def' }, function (err) {
+      $('set-msg').innerHTML = err ? '<span class="err-text">' + esc(err) + '</span>' : 'Сброшено';
+      loadSettings(); loadVersion();
+    });
+  };
+
+  // ==================== цикл ====================
+  var lastSlow = 0;
+  function tick(now) {
+    var t = Date.now();
+    if (now || t - lastSlow > 5000) { lastSlow = t; loadVersion(); if (tab !== 'cache' || now) loadTorrents(); }
+    if (tab === 'torrents' && !now) loadTorrents();
+    if (tab === 'cache' && $('cache-auto').checked) loadCache();
+    if (tab === 'log') loadLog();
+    if (tab === 'settings' && now) loadSettings();
+  }
+
+  // #вкладка или #cache/<хэш> — ссылку можно сохранить или прислать
+  function fromHash() {
+    var h = (location.hash || '').replace(/^#/, '').split('/');
+    if (h[0] === 'cache' && h[1] && h[1] !== cacheHash) { cacheHash = h[1]; cacheData = null; lastPeers = null; cacheSkeletonHash = null; }
+    showTab(['torrents', 'cache', 'log', 'settings'].indexOf(h[0]) >= 0 ? h[0] : 'torrents', h[0] === 'cache' ? cacheHash : null);
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+  setInterval(function () { if (!document.hidden) tick(false); }, 1000);
+})();
+</script>
+</body>
+</html>

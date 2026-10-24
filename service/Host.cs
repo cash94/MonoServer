@@ -8,7 +8,7 @@ namespace TorrStreamTorrServer
     {
         public const int DefaultPort = 8090;
 
-        public readonly LogRing Journal = new LogRing(300);
+        public readonly LogRing Journal = new LogRing(2000);
         public TorrEngine Engine { get; private set; }
         public HttpApi Api { get; private set; }
 

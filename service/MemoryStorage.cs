@@ -29,6 +29,16 @@ namespace TorrStreamTorrServer
             public byte[] Data;
             public bool Verified;
             public long Touched;     // Now() последнего обращения, мс
+            public int Written;      // байт записано — сколько скачано (для /cache)
+        }
+
+        /// <summary>Кусок в памяти — для /cache и страницы отладки</summary>
+        public struct PieceInfo
+        {
+            public int Id;
+            public bool Verified;
+            public int Size;         // скачано байт; проверен — весь кусок
+            public int Length;       // длина куска (последний короче)
         }
 
         public readonly int PieceLength;
@@ -98,6 +108,7 @@ namespace TorrStreamTorrServer
                     }
                     data.Slice(0, n).CopyTo(new Span<byte>(slot.Data, inPiece, n));
                     slot.Touched = Now();
+                    slot.Written = Math.Min(PieceSize(piece), slot.Written + n);
                     offset += n;
                     data = data.Slice(n);
                 }
@@ -151,6 +162,7 @@ namespace TorrStreamTorrServer
                 {
                     slot.Verified = passed;
                     slot.Touched = Now();
+                    if (!passed) slot.Written = 0;   // скачается заново
                 }
                 Monitor.PulseAll(sync);
             }
@@ -195,14 +207,18 @@ namespace TorrStreamTorrServer
             }
         }
 
-        /// <summary>Куски в памяти: номер → проверен ли (для /cache)</summary>
-        public List<KeyValuePair<int, bool>> Snapshot()
+        /// <summary>Куски в памяти по порядку (для /cache)</summary>
+        public List<PieceInfo> Snapshot()
         {
             lock (sync)
             {
-                var list = new List<KeyValuePair<int, bool>>(slots.Count);
-                foreach (var kv in slots) list.Add(new KeyValuePair<int, bool>(kv.Key, kv.Value.Verified));
-                list.Sort((a, b) => a.Key.CompareTo(b.Key));
+                var list = new List<PieceInfo>(slots.Count);
+                foreach (var kv in slots)
+                {
+                    int len = PieceSize(kv.Key);
+                    list.Add(new PieceInfo { Id = kv.Key, Verified = kv.Value.Verified, Length = len, Size = kv.Value.Verified ? len : kv.Value.Written });
+                }
+                list.Sort((a, b) => a.Id.CompareTo(b.Id));
                 return list;
             }
         }

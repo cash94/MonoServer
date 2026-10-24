@@ -94,7 +94,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.9";
+        public const string ServiceVersion = "1.0.10";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (TorrStream " + ServiceVersion + ", MonoTorrent)";
 
@@ -317,6 +317,8 @@ namespace TorrStreamTorrServer
                     if (item.TryGetValue("files", out var fv) && fv is List<object> files)
                         foreach (var f in files.OfType<Dictionary<string, object>>())
                             e.Files.Add(new FileStat { Id = (int)(f.Num("id") ?? 0), Path = f.Str("path") ?? "", Length = f.Num("length") ?? 0 });
+                    // База до 1.0.10 — в порядке и с номерами словаря info
+                    e.Files = FileOrder.Apply(e.Files);
                     entries[e.Hash] = e;
                 }
             }
@@ -682,9 +684,16 @@ namespace TorrStreamTorrServer
 
         static string Norm(string p) { return (p ?? "").Replace('\\', '/').Trim('/'); }
 
-        // Файлы в порядке словаря info — номера как у TorrServer (с 1, вместе с
-        // файлами-заполнителями). Не вышло — порядок MonoTorrent
+        // Файлы и номера — как у TorrServer: по пути, с 1, вместе с
+        // файлами-заполнителями (FileOrder)
         static List<FileStat> BuildFiles(TorrentManager m)
+        {
+            return FileOrder.Apply(BuildFilesInfoOrder(m));
+        }
+
+        // Пути из словаря info (там и заполнители BEP 47, в MonoTorrent их нет).
+        // Не вышло — файлы MonoTorrent
+        static List<FileStat> BuildFilesInfoOrder(TorrentManager m)
         {
             var t = m.Torrent;
             var list = new List<FileStat>();
@@ -1148,37 +1157,147 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>POST /cache {"action":"get"} — как у TorrServer: куски в памяти и читатели</summary>
-        public void WriteCache(JsonWriter w, TorrEntry e)
+        class ReaderView
+        {
+            public int Piece, End, FileId;
+            public long Pos, Length, Offset, Seq;
+            public string Path;
+            public bool Primary;
+        }
+
+        /// <summary>
+        /// POST /cache — как у TorrServer (Capacity, Filled, Pieces, Readers…) и
+        /// сверх того для страницы отладки: у читателя — файл, позиция, сколько
+        /// скачано подряд вперёд (Ahead) из окна (Window); окно WindowRequester,
+        /// откуда пиры; с peers — список пиров
+        /// </summary>
+        public void WriteCache(JsonWriter w, TorrEntry e, bool withPeers = false)
         {
             PieceStore store;
-            int pl;
-            List<int[]> readers = new List<int[]>();
+            int pl, ahead = 0, behind = 0;
+            ReadWindow win;
+            TorrentManager m;
+            var readers = new List<ReaderView>();
             lock (sync)
             {
                 store = e.Store;
+                m = e.Manager;
+                win = e.Window;
                 pl = PieceLengthOf(e);
                 if (pl > 0)
-                    foreach (var r in e.Readers.Where(x => x.Stat.File != null))
+                {
+                    ahead = AheadPieces(pl);
+                    behind = BehindPieces(pl);
+                    var live = e.Readers.Where(x => !x.Closed && x.Stat.File != null).ToList();
+                    var primary = live.OrderByDescending(r => r.Seq).FirstOrDefault();
+                    foreach (var r in live)
                     {
                         int p = PieceOf(r, pl);
-                        readers.Add(new[] { p, Math.Min(r.Stat.File.EndPieceIndex, p + AheadPieces(pl) - 1) });
+                        readers.Add(new ReaderView
+                        {
+                            Piece = p, End = Math.Min(r.Stat.File.EndPieceIndex, p + ahead - 1),
+                            FileId = r.Stat.Id, Path = r.Stat.Path, Pos = r.Position, Length = r.Stat.Length,
+                            Offset = r.Stat.File.OffsetInTorrent, Seq = r.Seq, Primary = r == primary,
+                        });
                     }
+                }
             }
+            var pieces = store != null ? store.Snapshot() : new List<PieceStore.PieceInfo>();
+
             w.Obj().Prop("Hash", e.Hash)
                 .Prop("Capacity", store != null ? store.Capacity : Settings.CacheSize)
                 .Prop("Filled", store != null ? store.Filled : 0)
                 .Prop("PiecesLength", pl)
                 .Prop("PiecesCount", store != null ? store.PieceCount : 0)
+                .Prop("ReadAheadPieces", ahead).Prop("BehindPieces", behind)
                 .Key("Torrent");
             WriteStatus(w, e);
+            // Приоритет — как у TorrServer: 5 — кусок читателя, 4 — следующий, 3 — окно вперёд
             w.Key("Pieces").Obj();
-            if (store != null)
-                foreach (var kv in store.Snapshot())
-                    w.Key(kv.Key.ToString()).Obj().Prop("Id", kv.Key).Prop("Length", pl).Prop("Size", kv.Value ? pl : 0)
-                        .Prop("Completed", kv.Value).Prop("Priority", 0).EndObj();
+            foreach (var pc in pieces)
+            {
+                int prio = 0;
+                foreach (var r in readers)
+                {
+                    if (pc.Id == r.Piece) prio = Math.Max(prio, 5);
+                    else if (pc.Id == r.Piece + 1) prio = Math.Max(prio, 4);
+                    else if (pc.Id > r.Piece && pc.Id <= r.End) prio = Math.Max(prio, 3);
+                }
+                w.Key(pc.Id.ToString()).Obj().Prop("Id", pc.Id).Prop("Length", pc.Length).Prop("Size", pc.Size)
+                    .Prop("Completed", pc.Verified).Prop("Priority", prio).EndObj();
+            }
             w.EndObj().Key("Readers").Arr();
-            foreach (var r in readers) w.Obj().Prop("Start", r[0]).Prop("End", r[1]).Prop("Reader", r[0]).EndObj();
-            w.EndArr().EndObj();
+            foreach (var r in readers)
+            {
+                long left = Math.Max(0, r.Length - r.Pos);
+                long window = Math.Min((long)ahead * pl, left);
+                long run = store != null ? store.VerifiedRun(r.Offset + r.Pos, window) : 0;
+                int inWindow = 0;
+                foreach (var pc in pieces) if (pc.Verified && pc.Id >= r.Piece && pc.Id <= r.End) inWindow++;
+                w.Obj().Prop("Start", r.Piece).Prop("End", r.End).Prop("Reader", r.Piece)
+                    .Prop("FileId", r.FileId).Prop("Path", r.Path).Prop("Pos", r.Pos).Prop("FileLength", r.Length)
+                    .Prop("FileOffset", r.Offset).Prop("Primary", r.Primary).Prop("Seq", r.Seq)
+                    .Prop("Ahead", run).Prop("Window", window)
+                    .Prop("WindowPieces", r.End - r.Piece + 1).Prop("WindowReady", inWindow)
+                    .EndObj();
+            }
+            w.EndArr();
+            if (win != null && win.Primary >= 0)
+            {
+                w.Key("Window").Obj().Prop("Primary", win.Primary).Prop("PrimaryEnd", win.PrimaryEnd).Key("Secondary").Arr();
+                foreach (int x in win.Secondary ?? new int[0]) w.Val(x);
+                w.EndArr().EndObj();
+            }
+            var d = e.Diag;
+            w.Key("Diag").Obj();
+            lock (d)
+            {
+                w.Key("Found").Obj().Prop("tracker", d.Tracker).Prop("dht", d.Dht).Prop("pex", d.Pex).Prop("lpd", d.Lpd).EndObj();
+                w.Key("Fails").Obj();
+                foreach (var kv in d.Fails) w.Prop(kv.Key, kv.Value);
+                w.EndObj().Key("Trackers").Obj();
+                foreach (var kv in d.Trackers) w.Prop(kv.Key, kv.Value);
+                w.EndObj();
+            }
+            if (m != null)
+            {
+                w.Prop("State", m.State.ToString());
+                if (m.Error != null) w.Prop("Error", m.Error.Reason + " " + m.Error.Exception?.Message);
+            }
+            w.EndObj();
+            if (withPeers && m != null)
+            {
+                w.Key("Peers").Arr();
+                try
+                {
+                    var task = m.GetPeersAsync();
+                    if (task.Wait(3000))
+                        foreach (var p in task.Result.OrderByDescending(x => x.Monitor.DownloadRate))
+                        {
+                            w.Obj().Prop("Address", p.Uri != null ? p.Uri.Host + ":" + p.Uri.Port : "")
+                                .Prop("Client", PeerClient(p.ClientApp))
+                                .Prop("Down", p.Monitor.DownloadRate).Prop("Up", p.Monitor.UploadRate)
+                                .Prop("Received", p.Monitor.DataBytesReceived)
+                                .Prop("Seeder", p.IsSeeder)
+                                .Prop("Have", p.BitField != null ? p.BitField.PercentComplete : 0.0)
+                                .Prop("Requests", p.AmRequestingPiecesCount)
+                                .Prop("Choking", p.IsChoking).Prop("Interested", p.AmInterested)
+                                .Prop("Encryption", p.EncryptionType.ToString())
+                                .Prop("Incoming", p.ConnectionDirection == Direction.Incoming)
+                                .EndObj();
+                        }
+                }
+                catch { }
+                w.EndArr();
+            }
+            w.EndObj();
+        }
+
+        // Клиент пира: «qBittorrent -qB4630-»; неизвестный — печатные символы его id
+        static string PeerClient(Software sw)
+        {
+            string id = new string((sw.ShortId ?? "").Where(ch => ch >= ' ' && ch <= '~').ToArray());
+            return sw.Client != ClientApp.Unknown ? sw.Client + " " + id : id;
         }
 
         static string EngineVersion()

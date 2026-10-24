@@ -27,6 +27,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Страница отладки на «/» (WebPage.cs) -->
+    <EmbeddedResource Include="web\index.html" LogicalName="web.index.html" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="pc\**" />
     <None Remove="pc\**" />
   </ItemGroup>

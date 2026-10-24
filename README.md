@@ -164,7 +164,7 @@ ARM — `TorrServer-linux-arm64.tar.gz` (64-битная система). Пор
 ## Сборка
 
 ```
-python tools/build.py [--version 1.0.13] [--linux]
+python tools/build.py [--version 1.0.14] [--linux]
 ```
 
 Нужен .NET SDK 8+ (Tizen.NET.Sdk и MonoTorrent скачаются сами). Результат — в

@@ -241,7 +241,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       var chips = [
         ['служба', v.service], ['движок', v.engine], ['', v.runtime + ' · ' + v.arch],
         ['память', v.memory_mb + ' МБ кэша · GC ' + v.gc_mb + ' МБ'], ['кэш на торрент', v.cache_mb + ' МБ'],
-        ['торрентов', v.torrents + ' (открыто ' + v.active + ')'], ['DHT', v.dht || '—'],
+        ['торрентов', v.torrents + ' (открыто ' + v.active + ')'], ['DHT', v.dht || '—'], ['ретрекеры', v.trackers || '—'],
         ['порт пиров', v.peers_port], ['работает', duration(v.uptime_s)]
       ];
       var html = '';

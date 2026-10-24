@@ -94,7 +94,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.10";
+        public const string ServiceVersion = "1.0.11";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (TorrStream " + ServiceVersion + ", MonoTorrent)";
 
@@ -119,6 +119,8 @@ namespace TorrStreamTorrServer
         readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
         ClientEngine engine;
         MemoryStorage storage;
+        DhtBootstrap dhtBoot;
+        TrackerList trackers;
         Timer idleTimer;
         long readerSeq;
         public TorrSettings Settings { get; private set; }
@@ -189,6 +191,10 @@ namespace TorrStreamTorrServer
                 SaveSettings();
             }
             LoadDb();
+            trackers = new TrackerList(Path.Combine(dataDir, "trackers_best_ip.txt"), log);
+            if (Settings.RetrackersMode == 1) trackers.RefreshInBackground();
+            dhtBoot = new DhtBootstrap(cacheDir, log);
+            if (Settings.EnableDHT) dhtBoot.ResolveInBackground();
             if (!CanForgetPieces) log("внимание: внутренности MonoTorrent не найдены — вытесненные куски не перекачаются");
             try
             {
@@ -223,7 +229,12 @@ namespace TorrStreamTorrServer
                 // всём потоке — лишняя нагрузка на процессор телевизора
                 AllowedEncryption = new List<EncryptionType> { EncryptionType.RC4Header, EncryptionType.PlainText, EncryptionType.RC4Full },
                 MaximumConnections = 200,
-                MaximumHalfOpenConnections = 16,
+                // Подключений «в процессе» сразу. Большинство адресов с трекеров
+                // недоступны (за NAT, устарели), и при 16 попытках по 8 с пиры
+                // перебирались по 2 в секунду — 200 адресов почти две минуты
+                MaximumHalfOpenConnections = 48,
+                // Рукопожатие (и шифрование) после подключения; по умолчанию 10 с
+                ConnectionTimeout = TimeSpan.FromSeconds(6),
                 MaximumDownloadRate = Settings.DownloadRateLimit * 1024,
                 MaximumUploadRate = Settings.UploadRateLimit * 1024,
                 // Веб-сиды (url-list) — уже через 5 с, если пиры дают меньше 15 КБ/с:
@@ -234,7 +245,9 @@ namespace TorrStreamTorrServer
             // MonoTorrent (Tizen) оно блокирующее и зависало на недоступных пирах.
             // Через WithPeerConnectionCreator: свой SocketConnector в соединения с
             // пирами MonoTorrent подставляет сам, мимо WithSocketConnectorCreator
+            // DHT — свой экземпляр (DhtBootstrap): первые узлы и перезапуск поиска
             var factories = Factories.Default.WithPieceWriterCreator(_ => storage)
+                .WithDhtCreator(dhtBoot.Create)
                 .WithPeerConnectionCreator("ipv4", uri => new MonoTorrent.Connections.Peer.SocketPeerConnection(uri, new PeerConnector()))
                 .WithPeerConnectionCreator("ipv6", uri => new MonoTorrent.Connections.Peer.SocketPeerConnection(uri, new PeerConnector()));
             return new ClientEngine(b.ToSettings(), factories);
@@ -506,7 +519,10 @@ namespace TorrStreamTorrServer
                         : await engine.AddAsync(new MagnetLink(magnet.InfoHashes, magnet.Name, null, magnet.Webseeds, magnet.Size), e.SaveDir, TorrentSettingsFor()).ConfigureAwait(false);
                     // У .torrent уровни из announce-list остаются, ретрекеры — отдельно;
                     // у magnet ретрекеры уже в ссылке (WithRetrackers)
-                    await AddTrackersAsync(e, m, torrent != null ? (Settings.RetrackersMode == 1 ? Retrackers : new string[0]) : (IEnumerable<string>)magnet.AnnounceUrls).ConfigureAwait(false);
+                    var urls = torrent != null ? (Settings.RetrackersMode == 1 ? Retrackers : new string[0]) : (IEnumerable<string>)magnet.AnnounceUrls;
+                    // Ретрекеры ngosang (TrackerList) — только здесь, в ссылку в базе не идут
+                    if (Settings.RetrackersMode == 1) urls = urls.Concat(trackers.Current);
+                    await AddTrackersAsync(e, m, urls).ConfigureAwait(false);
                     await m.ChangePickerAsync(new WindowRequester(() => e.Window)).ConfigureAwait(false);
                     m.PieceHashed += (s, a) =>
                     {
@@ -540,6 +556,8 @@ namespace TorrStreamTorrServer
                     };
                 }
                 lock (sync) e.Manager = m;
+                // Движок запустится с этим торрентом — и DHT с узлами из кэша
+                if (!engine.IsRunning && Settings.EnableDHT) await Task.Run(() => dhtBoot.PrepareCache()).ConfigureAwait(false);
                 if (m.State == TorrentState.Stopped || m.State == TorrentState.Error) await m.StartAsync().ConfigureAwait(false);
                 log(e.Hash + ": открыт" + (m.HasMetadata ? "" : ", жду метаданные"));
                 _ = WatchInfoAsync(e, m);
@@ -879,6 +897,7 @@ namespace TorrStreamTorrServer
                 }
             }
             foreach (var r in reports) log(r);
+            try { dhtBoot?.Tick(engine != null && engine.IsRunning, now); } catch (Exception ex) { log("DHT: " + ex.Message); }
             foreach (var kv in idle)
             {
                 var e = kv.Key;
@@ -1328,6 +1347,7 @@ namespace TorrStreamTorrServer
                 .Prop("torrents", entries.Count).Prop("active", active)
                 .Prop("evict", CanForgetPieces)
                 .Prop("dht", engine != null ? engine.Dht.State + ", узлов " + engine.Dht.NodeCount : "")
+                .Prop("trackers", trackers != null ? trackers.Current.Length + " (" + trackers.Source + (trackers.UpdatedAt.HasValue ? ", " + trackers.UpdatedAt.Value.ToString("dd.MM HH:mm") : "") + ")" : "")
                 .Prop("uptime_s", (long)(DateTime.UtcNow - StartedAt).TotalSeconds);
             if (StartError != null) w.Prop("error", StartError);
             w.EndObj();

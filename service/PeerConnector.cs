@@ -20,7 +20,9 @@ namespace TorrStreamTorrServer
 {
     public class PeerConnector : ISocketConnector
     {
-        public const int TimeoutMs = 8000;
+        // Как в master MonoTorrent (первая попытка — 3 с): недоступных пиров
+        // большинство, и чем быстрее отпускаем попытку, тем быстрее доходим до живых
+        public const int TimeoutMs = 4000;
 
         public async ReusableTask<Socket> ConnectAsync(Uri uri, CancellationToken token)
         {

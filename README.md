@@ -45,11 +45,20 @@ TorrServer → «Использовать TorrServer, установленный
 mkdir -p ~/torrserver && cd ~/torrserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/torrserver.sh -o torrserver.sh && bash torrserver.sh install
 ```
 
+Обновить уже поставленную службу до последнего релиза (порт и данные прежние):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/torrserver.sh -o /tmp/torrserver.sh && bash /tmp/torrserver.sh update
+```
+
+Для службы, поставленной с `--system`, — `bash /tmp/torrserver.sh update --system`.
+
 Скрипт `linux/torrserver.sh` (он же в архивах релиза):
 
 | Команда | Что делает |
 |---|---|
-| `./torrserver.sh install` | поставить службу и запустить; повторно — обновить или сменить порт |
+| `./torrserver.sh install` | поставить службу и запустить; повторно — сменить порт |
+| `./torrserver.sh update` | скачать последний релиз и перезапустить службу |
 | `./torrserver.sh status` | состояние и адрес для TorrStream, Lampa |
 | `./torrserver.sh log` | журнал службы |
 | `./torrserver.sh uninstall` | удалить службу (данные остаются) |
@@ -149,7 +158,7 @@ ARM — `TorrServer-linux-arm64.tar.gz` (64-битная система). Пор
 ## Сборка
 
 ```
-python tools/build.py [--version 1.0.12] [--linux]
+python tools/build.py [--version 1.0.13] [--linux]
 ```
 
 Нужен .NET SDK 8+ (Tizen.NET.Sdk и MonoTorrent скачаются сами). Результат — в

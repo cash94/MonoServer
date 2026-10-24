@@ -2,6 +2,7 @@
 # TorrServer (TorrServer-Tizen для Linux): служба systemd или запуск в терминале.
 #
 #   ./torrserver.sh install     — поставить службу и запустить (спросит порт, Enter — 8090)
+#   ./torrserver.sh update      — обновить службу до последнего релиза (порт прежний)
 #   ./torrserver.sh uninstall   — остановить и удалить службу (данные остаются)
 #   ./torrserver.sh status      — состояние службы и адрес
 #   ./torrserver.sh log         — журнал службы (Ctrl+C — выход)
@@ -31,12 +32,12 @@ ASK=1
 SYSTEM=0
 CMD="install"
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; }
 die() { echo "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        install|uninstall|status|log|run) CMD="$1"; shift ;;
+        install|update|uninstall|status|log|run) CMD="$1"; shift ;;
         -p|--port) PORT="${2:-}"; ASK=0; shift 2 ;;
         -d|--data) DATA="${2:-}"; shift 2 ;;
         -y|--yes) ASK=0; shift ;;
@@ -132,8 +133,9 @@ choose_port() {
 
 # ---------- программа ----------
 
+# Последний релиз: программа (и скрипт) — в каталог $1 (по умолчанию рядом со скриптом)
 download() {
-    local arch asset url tmp
+    local dest="${1:-$HERE}" arch asset url tmp
     case "$(uname -m)" in
         x86_64|amd64) arch=x64 ;;
         aarch64|arm64) arch=arm64 ;;
@@ -150,9 +152,12 @@ download() {
     else
         echo "Нужен curl или wget." >&2; rm -rf "$tmp"; return 1
     fi
-    tar xzf "$tmp/$asset" -C "$HERE" TorrServer || { rm -rf "$tmp"; return 1; }
+    tar xzf "$tmp/$asset" -C "$tmp" || { rm -rf "$tmp"; return 1; }
+    [ -f "$tmp/TorrServer" ] || { echo "В архиве нет программы TorrServer." >&2; rm -rf "$tmp"; return 1; }
+    mkdir -p "$dest" && cp "$tmp/TorrServer" "$dest/TorrServer" && chmod +x "$dest/TorrServer" || { rm -rf "$tmp"; return 1; }
+    # Скрипт из архива (1.0.12 и новее) — рядом, если обновляем не его же
+    [ -f "$tmp/torrserver.sh" ] && [ "$dest" != "$HERE" ] && cp "$tmp/torrserver.sh" "$dest/torrserver.sh" && chmod +x "$dest/torrserver.sh"
     rm -rf "$tmp"
-    chmod +x "$SRC_BIN"
 }
 
 ensure_binary() {
@@ -242,6 +247,28 @@ EOF
     echo "  состояние: $INSTALL_DIR/torrserver.sh status$([ "$SYSTEM" = 1 ] && echo ' --system'), журнал: … log"
 }
 
+cmd_update() {
+    command -v systemctl >/dev/null 2>&1 || die "Нет systemd (systemctl)."
+    service_exists || die "Служба $NAME не установлена$([ "$SYSTEM" = 0 ] && echo ' (для системной — с --system)'). Поставить: $0 install"
+    local p tmp before after
+    p="$(cat "$CONF" 2>/dev/null)"
+    before="$(curl -fs --max-time 2 "http://127.0.0.1:$p/echo" 2>/dev/null)"
+    tmp="$(mktemp -d)" || exit 1
+    download "$tmp" || { rm -rf "$tmp"; die "Не скачалось — служба не тронута."; }
+    SCTL stop "$NAME"
+    $SUDO install -m 755 "$tmp/TorrServer" "$INSTALL_DIR/TorrServer" || { SCTL start "$NAME"; rm -rf "$tmp"; die "Не удалось заменить программу — служба запущена прежняя."; }
+    [ -f "$tmp/torrserver.sh" ] && $SUDO install -m 755 "$tmp/torrserver.sh" "$INSTALL_DIR/torrserver.sh"
+    rm -rf "$tmp"
+    SCTL start "$NAME" || die "Служба не запустилась — журнал: $0 log"
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        after="$(curl -fs --max-time 2 "http://127.0.0.1:$p/echo" 2>/dev/null)" && [ -n "$after" ] && break
+        sleep 1
+    done
+    echo "Обновлено: ${before:-?} → ${after:-не отвечает (журнал: $0 log)}"
+    print_addresses "$p"
+}
+
 cmd_uninstall() {
     service_exists || die "Служба $NAME не установлена$([ "$SYSTEM" = 0 ] && echo ' (для системной — с --system)')."
     SCTL disable --now "$NAME" 2>/dev/null
@@ -279,6 +306,7 @@ cmd_run() {
 
 case "$CMD" in
     install) cmd_install ;;
+    update) cmd_update ;;
     uninstall) cmd_uninstall ;;
     status) cmd_status ;;
     log) cmd_log ;;

@@ -443,6 +443,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
         stat('Скорость', '↓ ' + speed(t.download_speed) + ' · ↑ ' + speed(t.upload_speed)) +
         stat('Пиры', (t.active_peers || 0) + ' подключено · ' + (t.half_open_peers || 0) + ' подключаются · ' + (t.pending_peers || 0) + ' ждут · сидов ' + (t.connected_seeders || 0)) +
         stat('Кэш', bytes(c.Filled) + ' из ' + bytes(c.Capacity) + ' (' + pct(c.Filled, c.Capacity).toFixed(0) + '%)') +
+        stat('Служебный кэш', bytes(c.Pinned || 0) + ' — начало и конец файла (по 8 МБ или куску), вне кэша') +
         stat('Кусков в памяти', completed + ' готово · ' + partial + ' качается') +
         stat('Кусок', bytes(pl) + ' · всего ' + c.PiecesCount) +
         stat('Окно вперёд', c.ReadAheadPieces + ' кусков (' + bytes(c.ReadAheadPieces * pl) + ')' + ' · назад ' + c.BehindPieces) +

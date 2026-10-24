@@ -13,7 +13,10 @@ namespace TorrStreamTorrServer
         public long CacheSize = 64L << 20;      // байт на торрент, как у TorrServer
         public int ReaderReadAHead = 95;        // % кэша — вперёд от позиции читателя
         public int PreloadCache = 50;           // % кэша — предзагрузка
-        public int ConnectionsLimit = 50;       // пиров на торрент (у TorrServer 25, но MonoTorrent медленнее набирает скорость с пира)
+        // Пиров на торрент, как у TorrServer. До 1.0.14 было 50: незавершённые
+        // подключения занимали места в лимите MonoTorrent — теперь под них запас
+        // (PeerRotation.Headroom), а лишних и медленных служба отключает
+        public int ConnectionsLimit = 25;
         public int TorrentDisconnectTimeout = 30; // с без читателей — и торрент закрывается
         public int PeersListenPort;             // 0 — выбрать при первом запуске
         public bool EnableDHT = true;
@@ -32,7 +35,7 @@ namespace TorrStreamTorrServer
 
         // Версия набора умолчаний: settings.json пишется целиком (порт пиров при
         // первом запуске), и старое умолчание там не отличить от выбранного
-        const int SettingsVersion = 3;
+        const int SettingsVersion = 4;
 
         Dictionary<string, object> extra = new Dictionary<string, object>();
 
@@ -45,10 +48,10 @@ namespace TorrStreamTorrServer
                 {
                     var o = Json.ParseObject(File.ReadAllText(path));
                     s.Apply(o);
-                    // 1.0.0–1.0.1: ConnectionsLimit по умолчанию был 25
-                    if ((o.Num("TorrStreamSettingsVersion") ?? 1) < 2 && s.ConnectionsLimit == 25) s.ConnectionsLimit = 50;
                     // до 1.0.11 ResponsiveMode не было — false мог прийти от клиента и лежать без дела
                     if ((o.Num("TorrStreamSettingsVersion") ?? 1) < 3) s.ResponsiveMode = true;
+                    // до 1.0.14 умолчание было 50 — на новое умолчание TorrServer
+                    if ((o.Num("TorrStreamSettingsVersion") ?? 1) < 4 && s.ConnectionsLimit == 50) s.ConnectionsLimit = 25;
                 }
             }
             catch { }

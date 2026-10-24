@@ -68,6 +68,8 @@ namespace TorrStreamTorrServer
         public readonly PeerRotation Rotation = new PeerRotation();
         // Свой запас адресов (PeerPool.cs)
         public readonly PeerPool Pool = new PeerPool();
+        // Файл, чьи начало и конец закреплены в PieceStore
+        public ITorrentManagerFile PinnedFile;
 
         public bool Active => Manager != null;
         public bool HasInfo => Files.Count > 0;
@@ -92,6 +94,9 @@ namespace TorrStreamTorrServer
         public TorrEntry Entry;
         public FileStat Stat;
         public long Position;
+        // Дальше этого места (от начала файла) окно не качает: −1 — без предела.
+        // У ридеров предзагрузки — их участок, как SetReadahead(0) у TorrServer
+        public long Limit = -1;
         public long Seq;
         public volatile bool Closed;
     }
@@ -1009,9 +1014,9 @@ namespace TorrStreamTorrServer
             }
         }
 
-        public TorrReader OpenReader(TorrEntry e, FileStat f, long position)
+        public TorrReader OpenReader(TorrEntry e, FileStat f, long position, long limit = -1)
         {
-            var r = new TorrReader { Entry = e, Stat = f, Position = position, Seq = Interlocked.Increment(ref readerSeq) };
+            var r = new TorrReader { Entry = e, Stat = f, Position = position, Limit = limit, Seq = Interlocked.Increment(ref readerSeq) };
             lock (sync)
             {
                 e.Readers.Add(r);
@@ -1053,6 +1058,32 @@ namespace TorrStreamTorrServer
 
         // Окна читателей: что не вытеснять (Protect) и что качать (Window —
         // главный читатель последний открытый, у остальных — по паре кусков). Под sync
+        // Служебный кэш: первые и последние max(кусок, 8 МБ) файла — заголовок
+        // контейнера, индекс MKV, moov MP4 (у фильма на 2 часа — около 5 МБ). Плеер
+        // просит их и при перемотках. Одного куска мало: при кусках по 256 КБ
+        // последний мегабайт после прокрутки кэша качался заново (3,9 с). Объём —
+        // как предзагрузка конца у TorrServer
+        static IEnumerable<int> FileEnds(FileStat f, int pl)
+        {
+            long pin = Math.Max(pl, 8L << 20);
+            long off = f.File.OffsetInTorrent, len = f.Length;
+            if (len <= 0) yield break;
+            int first = (int)(off / pl), last = f.File.EndPieceIndex;
+            int headEnd = (int)((off + Math.Min(len, pin) - 1) / pl);
+            int tailStart = (int)((off + Math.Max(0, len - pin)) / pl);
+            for (int p = first; p <= headEnd; p++) yield return p;
+            for (int p = Math.Max(tailStart, headEnd + 1); p <= last; p++) yield return p;
+        }
+
+        // Последний кусок окна: не дальше конца файла и предела читателя
+        static int WindowEnd(TorrReader r, int pl, int want)
+        {
+            int end = Math.Min(r.Stat.File.EndPieceIndex, want);
+            if (r.Limit > 0)
+                end = Math.Min(end, (int)((r.Stat.File.OffsetInTorrent + Math.Min(r.Limit, r.Stat.Length) - 1) / pl));
+            return end;
+        }
+
         void UpdateProtect(TorrEntry e)
         {
             int pl = PieceLengthOf(e);
@@ -1069,16 +1100,22 @@ namespace TorrStreamTorrServer
             {
                 int p = PieceOf(live[i], pl);
                 arr[i * 2] = p - behind;
-                arr[i * 2 + 1] = Math.Min(live[i].Stat.File.EndPieceIndex, p + ahead);
+                arr[i * 2 + 1] = WindowEnd(live[i], pl, p + ahead);
             }
             e.Protect = arr;
 
             var primary = live.OrderByDescending(r => r.Seq).First();
+            // Начало и конец файла главного читателя — служебный кэш, отдельно от кэша (PieceStore.SetPinned)
+            if (e.Store != null && !ReferenceEquals(e.PinnedFile, primary.Stat.File))
+            {
+                e.PinnedFile = primary.Stat.File;
+                e.Store.SetPinned(FileEnds(primary.Stat, pl));
+            }
             int pp = PieceOf(primary, pl);
             e.Window = new ReadWindow
             {
                 Primary = pp,
-                PrimaryEnd = Math.Min(primary.Stat.File.EndPieceIndex, pp + ahead - 1),
+                PrimaryEnd = Math.Max(pp, WindowEnd(primary, pl, pp + ahead - 1)),
                 PrimaryOffset = primary.Stat.File.OffsetInTorrent + Math.Min(primary.Position, Math.Max(0, primary.Stat.Length - 1)),
                 Secondary = live.Where(r => r != primary).Select(r => PieceOf(r, pl)).Distinct().Where(x => x != pp).ToArray(),
             };
@@ -1127,25 +1164,68 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>
-        /// Предзагрузка, как у TorrServer: PreloadCache % кэша с начала файла.
-        /// Блокирует до конца (или прерывания)
+        /// Предзагрузка, как у TorrServer (torr/preload.go): PreloadCache % кэша —
+        /// начало файла и, параллельно, его конец (последние max(кусок, 8 МБ)). В
+        /// конце MKV — индекс для перемотки, у многих MP4 — заголовок moov: плеер
+        /// просит их сразу после старта, и без предзагрузки конца его качали уже
+        /// при запуске («файл 1 с 4102 МБ» в логах с телевизоров). Блокирует до
+        /// конца (или прерывания)
         /// </summary>
         public bool Preload(TorrEntry e, FileStat f, Func<bool> aborted)
         {
             long size = Math.Min(f.Length, Settings.CacheSize * Settings.PreloadCache / 100);
             if (size <= 0) return true;
-            var r = OpenReader(e, f, 0);
-            lock (sync) { e.Preloading = true; e.PreloadSize = size; e.PreloadedBytes = 0; }
+            int pl;
+            lock (sync) pl = PieceLengthOf(e);
+            long tail = Math.Max(pl, 8L << 20);
+            long headEnd = size - tail;
+            if (headEnd < 0) headEnd = size;
+            headEnd = Math.Min(headEnd, f.Length);
+            long tailStart = f.Length - tail;
+            bool withTail = tailStart > headEnd;
+            if (!withTail) headEnd = size;   // файл небольшой: начало и конец сходятся
+            long total = withTail ? headEnd + (f.Length - tailStart) : headEnd;
+
+            // Конец — открываем первым: главный читатель (окно вперёд) — последний
+            // открытый, им должно быть начало; конец идёт как второй читатель
+            TorrReader rt = withTail ? OpenReader(e, f, tailStart) : null;
+            // Окно начала — только до своего участка: иначе оно качало обычные
+            // 60 МБ вперёд, забивало кэш и канал, пока конец файла ждал
+            var rh = OpenReader(e, f, 0, headEnd);
+            lock (sync) { e.Preloading = true; e.PreloadSize = total; e.PreloadedBytes = 0; }
+            long headDone = 0, tailDone = 0;
+            bool failed = false;
+            Func<bool> stop = () => failed || aborted();
+            Action report = () => { lock (sync) e.PreloadedBytes = Interlocked.Read(ref headDone) + Interlocked.Read(ref tailDone); };
             try
             {
+                Task tailTask = Task.CompletedTask;
+                if (rt != null)
+                    tailTask = Task.Run(() =>
+                    {
+                        var tb = new byte[64 * 1024];
+                        while (rt.Position < f.Length)
+                        {
+                            int n = Read(rt, tb, 0, (int)Math.Min(tb.Length, f.Length - rt.Position), stop);
+                            if (n <= 0) { failed = true; return; }
+                            Interlocked.Exchange(ref tailDone, rt.Position - tailStart);
+                            report();
+                        }
+                    });
                 var buf = new byte[64 * 1024];
-                while (r.Position < size)
+                while (rh.Position < headEnd)
                 {
-                    int n = Read(r, buf, 0, (int)Math.Min(buf.Length, size - r.Position), aborted);
-                    if (n <= 0) return false;
-                    lock (sync) e.PreloadedBytes = r.Position;
+                    int n = Read(rh, buf, 0, (int)Math.Min(buf.Length, headEnd - rh.Position), stop);
+                    if (n <= 0) { failed = true; break; }
+                    Interlocked.Exchange(ref headDone, rh.Position);
+                    report();
                 }
-                return true;
+                // Начало готово — его читатель закрываем: конец становится главным
+                // читателем с окном до конца файла (вторым — только 2 куска вперёд)
+                CloseReader(rh);
+                rh = null;
+                tailTask.Wait();
+                return !failed;
             }
             finally
             {
@@ -1154,7 +1234,8 @@ namespace TorrStreamTorrServer
                     e.Preloading = false;
                     e.KeepUntilMs = Now() + PreloadKeepMs;
                 }
-                CloseReader(r);
+                if (rh != null) CloseReader(rh);
+                if (rt != null) CloseReader(rt);
             }
         }
 
@@ -1271,7 +1352,7 @@ namespace TorrStreamTorrServer
                         int p = PieceOf(r, pl);
                         readers.Add(new ReaderView
                         {
-                            Piece = p, End = Math.Min(r.Stat.File.EndPieceIndex, p + ahead - 1),
+                            Piece = p, End = Math.Max(p, WindowEnd(r, pl, p + ahead - 1)),
                             FileId = r.Stat.Id, Path = r.Stat.Path, Pos = r.Position, Length = r.Stat.Length,
                             Offset = r.Stat.File.OffsetInTorrent, Seq = r.Seq, Primary = r == primary,
                         });
@@ -1286,6 +1367,7 @@ namespace TorrStreamTorrServer
                 .Prop("PiecesLength", pl)
                 .Prop("PiecesCount", store != null ? store.PieceCount : 0)
                 .Prop("ReadAheadPieces", ahead).Prop("BehindPieces", behind)
+                .Prop("Pinned", store != null ? store.PinnedBytes : 0)
                 .Key("Torrent");
             WriteStatus(w, e);
             // Приоритет — как у TorrServer: 5 — кусок читателя, 4 — следующий, 3 — окно вперёд

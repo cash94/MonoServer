@@ -115,6 +115,9 @@ namespace TorrStreamTorrServer
         readonly object sync = new object();
         readonly Dictionary<int, Slot> slots = new Dictionary<int, Slot>();
         readonly Stack<byte[]> spare = new Stack<byte[]>();
+        // Служебный кэш: начало и конец файла, который смотрят (заголовок, индекс
+        // MKV / moov MP4) — в Capacity не считаются и не вытесняются (SetPinned)
+        HashSet<int> pinned = new HashSet<int>();
         long capacity;
         bool disposed;
 
@@ -148,7 +151,8 @@ namespace TorrStreamTorrServer
                 lock (sync)
                 {
                     long sum = 0;
-                    foreach (var kv in slots) sum += kv.Value.Verified ? PieceSize(kv.Key) : kv.Value.Written;
+                    foreach (var kv in slots)
+                        if (!pinned.Contains(kv.Key)) sum += kv.Value.Verified ? PieceSize(kv.Key) : kv.Value.Written;
                     return sum;
                 }
             }
@@ -157,8 +161,39 @@ namespace TorrStreamTorrServer
         /// <summary>Сколько байт держат куски (выделенные буферы)</summary>
         public long Filled
         {
-            get { lock (sync) return (long)slots.Count * PieceLength; }
+            get { lock (sync) return (long)UnpinnedCount() * PieceLength; }
         }
+
+        /// <summary>Сколько скачано в закреплённых кусках (начало и конец файла)</summary>
+        public long PinnedBytes
+        {
+            get
+            {
+                lock (sync)
+                {
+                    long sum = 0;
+                    foreach (var kv in slots)
+                        if (pinned.Contains(kv.Key)) sum += kv.Value.Verified ? PieceSize(kv.Key) : kv.Value.Written;
+                    return sum;
+                }
+            }
+        }
+
+        int UnpinnedCount()
+        {
+            int n = 0;
+            foreach (var k in slots.Keys) if (!pinned.Contains(k)) n++;
+            return n;
+        }
+
+        /// <summary>Какие куски держать отдельно от кэша (прежние становятся обычными)</summary>
+        public void SetPinned(IEnumerable<int> pieces)
+        {
+            var set = new HashSet<int>(pieces);
+            lock (sync) pinned = set;
+        }
+
+        public bool IsPinned(int piece) { lock (sync) return pinned.Contains(piece); }
 
         int PieceSize(int piece)
         {
@@ -389,7 +424,8 @@ namespace TorrStreamTorrServer
         // мягкий, а размер окна читателей и так от него считается
         byte[] Allocate(int piece, ref List<int> evicted)
         {
-            while ((long)(slots.Count + 1) * PieceLength > capacity)
+            // Закреплённый кусок места в кэше не занимает — и ничего не вытесняет
+            while (!pinned.Contains(piece) && (long)(UnpinnedCount() + 1) * PieceLength > capacity)
             {
                 int victim = PickVictim(piece);
                 if (victim < 0) break;
@@ -410,7 +446,7 @@ namespace TorrStreamTorrServer
             bool bestVerified = false;
             foreach (var kv in slots)
             {
-                if (kv.Key == forPiece) continue;
+                if (kv.Key == forPiece || pinned.Contains(kv.Key)) continue;
                 var s = kv.Value;
                 if (!s.Verified && now - s.Touched < StaleUnverifiedMs) continue;
                 if (IsProtected(kv.Key)) continue;

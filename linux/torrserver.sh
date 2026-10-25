@@ -5,7 +5,7 @@
 # переносится в monoserver с её портом и данными.
 set -u
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-URL="https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh"
+URL="https://raw.githubusercontent.com/cash94/MonoServer/main/linux/monoserver.sh"
 NEW="$HERE/monoserver.sh"
 echo "torrserver.sh теперь monoserver.sh — скачиваю $URL"
 if command -v curl >/dev/null 2>&1; then curl -fsSL "$URL" -o "$NEW.tmp"

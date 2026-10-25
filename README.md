@@ -2,7 +2,8 @@
 
 TorrServer на C# (MonoTorrent): на телевизоре Samsung (Tizen), в Linux,
 Windows и Android — служба с API [TorrServer](https://github.com/YouROK/TorrServer)
-MatriX на порту 8090. До 1.0.18 называлась TorrServer-Tizen.
+MatriX на порту 8090. До 1.0.18 называлась TorrServer-Tizen (репозиторий —
+`cash94/TorrServer-Tizen`, старые ссылки GitHub перенаправляет сюда).
 [TorrStream](https://github.com/cash94/TorrStream-Tizen), Lampa и другие
 клиенты видят её как обычный TorrServer.
 
@@ -45,13 +46,13 @@ TorrServer → «Использовать TorrServer, установленный
 проверит, свободен ли; программу для x64 или arm64 скачает из релиза):
 
 ```bash
-mkdir -p ~/monoserver && cd ~/monoserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o monoserver.sh && bash monoserver.sh install
+mkdir -p ~/monoserver && cd ~/monoserver && curl -fsSL https://raw.githubusercontent.com/cash94/MonoServer/main/linux/monoserver.sh -o monoserver.sh && bash monoserver.sh install
 ```
 
 Обновить уже поставленную службу до последнего релиза (порт и данные прежние):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o /tmp/monoserver.sh && bash /tmp/monoserver.sh update
+curl -fsSL https://raw.githubusercontent.com/cash94/MonoServer/main/linux/monoserver.sh -o /tmp/monoserver.sh && bash /tmp/monoserver.sh update
 ```
 
 Для службы, поставленной с `--system`, — `bash /tmp/monoserver.sh update --system`.

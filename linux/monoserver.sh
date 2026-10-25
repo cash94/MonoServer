@@ -26,7 +26,7 @@ set -u
 NAME="monoserver"
 OLD_NAME="torrserver-tizen"   # до 1.0.18
 DEFAULT_PORT=8090
-REPO="cash94/TorrServer-Tizen"
+REPO="cash94/MonoServer"
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 SRC_BIN="$HERE/MonoServer"
 DATA=""

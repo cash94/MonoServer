@@ -232,7 +232,7 @@ Termux (`service/mono/OpenSslHttpHandler.cs`, `Http.cs`), с корневыми
 ## Сборка
 
 ```
-python tools/build.py [--version 1.0.20] [--linux]
+python tools/build.py [--version 1.0.21] [--linux]
 ```
 
 Нужен .NET SDK 8+ (Tizen.NET.Sdk и MonoTorrent скачаются сами). Результат — в

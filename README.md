@@ -193,7 +193,7 @@ Microsoft выпускает только для arm64, и ей нужен си�
 ## Сборка
 
 ```
-python tools/build.py [--version 1.0.16] [--linux]
+python tools/build.py [--version 1.0.17] [--linux]
 ```
 
 Нужен .NET SDK 8+ (Tizen.NET.Sdk и MonoTorrent скачаются сами). Результат — в

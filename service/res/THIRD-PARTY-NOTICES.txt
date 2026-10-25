@@ -1,7 +1,8 @@
 Сторонний код в MonoServer
 
 MonoTorrent 3.0.2 (https://github.com/alanmcgovern/monotorrent) — библиотеки в пакете
-(bin/MonoTorrent*.dll) и переделка StreamingPieceRequester в WindowRequester.cs.
+(bin/MonoTorrent*.dll) и переделка StreamingPieceRequester в WindowRequester.cs;
+uTP (service/Utp/) — перенос из master MonoTorrent (Copyright (C) 2026 Alan McGovern).
 Зависимости MonoTorrent — Mono.Nat, ReusableTasks (MIT, Alan McGovern),
 StandardSocketsHttpHandler (MIT, Tal Aloni), System.Memory (MIT, .NET Foundation).
 

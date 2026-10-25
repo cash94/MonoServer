@@ -21,6 +21,8 @@ namespace TorrStreamTorrServer
         public int PeersListenPort;             // 0 — выбрать при первом запуске
         public bool EnableDHT = true;
         public bool EnableUPNP = true;
+        // uTP — пиры по UDP (Utp/). У TorrServer это DisableUTP — понимаем и его
+        public bool EnableUTP = true;
         public int DownloadRateLimit;           // КБ/с, 0 — без ограничения
         public int UploadRateLimit;
         public int RetrackersMode = 1;          // 1 — добавлять ретрекеры к magnet
@@ -81,6 +83,8 @@ namespace TorrStreamTorrServer
                     case "PeersListenPort": PeersListenPort = (int)Clamp(o.Num(kv.Key) ?? PeersListenPort, 0, 65535); break;
                     case "EnableDHT": EnableDHT = o.Bool(kv.Key) ?? EnableDHT; break;
                     case "EnableUPNP": EnableUPNP = o.Bool(kv.Key) ?? EnableUPNP; break;
+                    case "EnableUTP": EnableUTP = o.Bool(kv.Key) ?? EnableUTP; break;
+                    case "DisableUTP": if (!o.ContainsKey("EnableUTP")) EnableUTP = !(o.Bool(kv.Key) ?? !EnableUTP); break;
                     case "DownloadRateLimit": DownloadRateLimit = (int)Clamp(o.Num(kv.Key) ?? 0, 0, int.MaxValue / 1024); break;
                     case "UploadRateLimit": UploadRateLimit = (int)Clamp(o.Num(kv.Key) ?? 0, 0, int.MaxValue / 1024); break;
                     case "RetrackersMode": RetrackersMode = (int)Clamp(o.Num(kv.Key) ?? RetrackersMode, 0, 3); break;
@@ -104,6 +108,8 @@ namespace TorrStreamTorrServer
                 .Prop("PeersListenPort", PeersListenPort)
                 .Prop("EnableDHT", EnableDHT)
                 .Prop("EnableUPNP", EnableUPNP)
+                .Prop("EnableUTP", EnableUTP)
+                .Prop("DisableUTP", !EnableUTP)
                 .Prop("DownloadRateLimit", DownloadRateLimit)
                 .Prop("UploadRateLimit", UploadRateLimit)
                 .Prop("RetrackersMode", RetrackersMode)

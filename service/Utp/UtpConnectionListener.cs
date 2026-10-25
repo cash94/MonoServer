@@ -1,0 +1,507 @@
+#nullable enable
+// Из master MonoTorrent (src/MonoTorrent.Connections/MonoTorrent.Connections.Peer/Utp,
+// MIT, Alan McGovern; в NuGet пока не вышло) — перенесено под C# 8 и
+// netstandard2.0 (Tizen), net472 (Mono на Android) и интерфейсы MonoTorrent 3.0.2.
+// Вместо UdpListener master — общий с DHT сокет (SharedUdpSocket.cs).
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
+
+using MonoTorrent;
+using MonoTorrent.Connections;
+using MonoTorrent.Connections.Peer;
+using ReusableTasks;
+
+namespace TorrStreamTorrServer.Utp
+{
+    // =========================================================================
+    // UtpPeerConnectionListener
+    //
+    // Consumes datagrams from a shared UDP socket for incoming uTP connections (BEP 29).
+    // When a ST_SYN is received it completes the handshake (replies ST_STATE)
+    // then raises ConnectionReceived with a UtpPeerConnection.
+    //
+    // Connection-ID convention (BEP 29 §connection id):
+    //   Initiator  picks  conn_id_recv  (sent in the SYN header).
+    //   Initiator  uses   conn_id_send = conn_id_recv + 1   after the SYN.
+    //   Acceptor   uses   conn_id_send = conn_id_recv       in every reply.
+    //   Acceptor   uses   conn_id_recv = conn_id_recv + 1   to demux inbound.
+    //
+    // Connection map key: (remote EndPoint, local conn_id_recv).
+    //   Acceptor side  – keyed by syn.ConnectionId + 1.
+    //   Initiator side – keyed by the random conn_id_recv we chose for the SYN.
+    // =========================================================================
+
+    public sealed class UtpPeerConnectionListener : IPeerConnectionListener
+    {
+        internal const byte UTP_VERSION = 1;
+        internal const uint INITIAL_WINDOW = 1 << 18;   // 256 kB
+
+        public event EventHandler<PeerConnectionEventArgs>? ConnectionReceived;
+        public event EventHandler<EventArgs>? StatusChanged;
+
+        public IPEndPoint? LocalEndPoint => started ? listener.LocalEndPoint : null;
+        public IPEndPoint PreferredLocalEndPoint => listener.PreferredLocalEndPoint;
+        public ListenerStatus Status => started ? listener.Status : ListenerStatus.NotListening;
+
+        /// <summary>
+        /// Выключено (настройка EnableUTP) — входящие SYN без ответа (пир уйдёт на
+        /// TCP), исходящих uTP-подключений нет; открытые соединения доживают сами
+        /// </summary>
+        public bool Enabled { get; set; } = true;
+
+        bool started;
+
+        sealed class RegisteredConnection
+        {
+            public RegisteredConnection (UtpPeerConnection connection, uint lastActivityMicroseconds, ushort? incomingSynSequenceNumber = null)
+            {
+                Connection = connection;
+                LastActivityMicroseconds = lastActivityMicroseconds;
+                IncomingSynSequenceNumber = incomingSynSequenceNumber;
+            }
+
+            public UtpPeerConnection Connection { get; }
+            public ushort? IncomingSynSequenceNumber { get; }
+            public uint LastActivityMicroseconds { get; set; }
+        }
+
+        readonly struct RecentResetKey : IEquatable<RecentResetKey>
+        {
+            public RecentResetKey (IPEndPoint remote, ushort connectionId, ushort sequenceNumber)
+            {
+                Remote = remote;
+                ConnectionId = connectionId;
+                SequenceNumber = sequenceNumber;
+            }
+
+            public IPEndPoint Remote { get; }
+            public ushort ConnectionId { get; }
+            public ushort SequenceNumber { get; }
+
+            public bool Equals (RecentResetKey other)
+                => EqualityComparer<IPEndPoint>.Default.Equals (Remote, other.Remote)
+                    && ConnectionId == other.ConnectionId
+                    && SequenceNumber == other.SequenceNumber;
+
+            public override bool Equals (object? obj)
+                => obj is RecentResetKey other && Equals (other);
+
+            public override int GetHashCode ()
+                => ((Remote?.GetHashCode () ?? 0) * 397 ^ ConnectionId) * 397 ^ SequenceNumber;
+        }
+
+        static readonly TimeSpan StaleConnectionTimeout = TimeSpan.FromMinutes (2);
+        static readonly TimeSpan StaleConnectionPruneInterval = TimeSpan.FromSeconds (10);
+        const int MaxRecentResetEntries = 256;
+        const uint RecentResetLifetimeMicroseconds = 10_000_000;
+
+        readonly ConcurrentDictionary<(EndPoint remoteEndpoint, ushort remoteConnectionReceiveId), RegisteredConnection> _connections = new ConcurrentDictionary<(EndPoint remoteEndpoint, ushort remoteConnectionReceiveId), RegisteredConnection> ();
+        readonly Dictionary<RecentResetKey, uint> recentResets = new Dictionary<RecentResetKey, uint> ();
+        readonly object recentResetsLocker = new object ();
+        readonly object backgroundTasksLocker = new object ();
+        readonly List<Task> backgroundTasks = new List<Task> ();
+        readonly SharedUdpSocket listener;
+        CancellationTokenSource? backgroundTasksCancellation;
+        bool backgroundTasksStarted;
+
+        public UtpChannel<(UtpPacket packet, UtpPeerConnection? connection, IPEndPoint remoteEndPoint, Action? sendCompleted)> SendQueue { get; }
+
+        public UtpPeerConnectionListener (SharedUdpSocket listener, UtpTransportSettings? transportSettings = null)
+            : this (listener, StopwatchUtpClock.Instance, transportSettings)
+        {
+        }
+
+        internal UtpPeerConnectionListener (SharedUdpSocket listener, IUtpClock clock, UtpTransportSettings? transportSettings = null)
+        {
+            this.listener = listener ?? throw new ArgumentNullException (nameof (listener));
+            Clock = clock;
+            TransportSettings = UtpTransportSettings.Create (transportSettings);
+            listener.ReceiveBufferSize = TransportSettings.SocketReceiveBufferBytes;
+            listener.SendBufferSize = TransportSettings.SocketSendBufferBytes;
+            Scheduler = new UtpConnectionScheduler (clock);
+            SendQueue = new UtpChannel<(UtpPacket, UtpPeerConnection?, IPEndPoint, Action?)> (TransportSettings.MaxSendQueuePackets);
+            listener.UtpReceived = ListenerMessageReceived;
+            listener.StatusChanged += (o, e) => StatusChanged?.Invoke (this, e);
+        }
+
+        internal IUtpClock Clock { get; }
+
+        internal UtpTransportSettings TransportSettings { get; }
+
+        internal UtpConnectionScheduler Scheduler { get; }
+
+        public void Start ()
+        {
+            if (!started) {
+                started = true;
+                listener.Acquire ();
+            }
+            if (listener.Status != ListenerStatus.Listening || backgroundTasksStarted)
+                return;
+
+            backgroundTasksStarted = true;
+            backgroundTasksCancellation = new CancellationTokenSource ();
+            TrackBackgroundTask (SendLoopAsync (backgroundTasksCancellation.Token));
+            TrackBackgroundTask (PruneStaleConnectionsLoopAsync (backgroundTasksCancellation.Token));
+        }
+
+        public void Stop ()
+        {
+            backgroundTasksCancellation?.Cancel ();
+            backgroundTasksCancellation = null;
+            backgroundTasksStarted = false;
+            if (started) {
+                started = false;
+                listener.Release ();
+            }
+        }
+
+        void TrackBackgroundTask (Task task)
+        {
+            lock (backgroundTasksLocker)
+                backgroundTasks.Add (task);
+
+            _ = task.ContinueWith (completed => {
+                lock (backgroundTasksLocker)
+                    backgroundTasks.Remove (completed);
+
+                if (completed.Exception != null)
+                    UtpLog.Error ($"uTP listener background task failed: {completed.Exception.GetBaseException ().Message}");
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
+        internal Task[] BackgroundTasksForTests {
+            get {
+                lock (backgroundTasksLocker)
+                    return backgroundTasks.ToArray ();
+            }
+        }
+
+        async Task SendLoopAsync (CancellationToken token)
+        {
+            try {
+                while (await SendQueue.Reader.WaitToReadAsync (token)) {
+                  while (SendQueue.Reader.TryRead (out var item)) {
+                    var (pkt, connection, remote, sendCompleted) = item;
+                    var packet = pkt;
+                    try {
+                        if (connection == null) {
+                            packet.SetTimestamp (Clock);
+                            packet.TimestampDiff = 0;
+                        } else {
+                            connection.PrepareForSend (ref packet);
+                        }
+                        listener.Send (
+                            packet.AsMemory (),
+                            remote,
+                            connection?.IsActiveMtuProbe (packet) == true && remote.AddressFamily == AddressFamily.InterNetwork);
+                    } catch (OperationCanceledException) {
+                        return;
+                    } catch (SocketException ex) when (!token.IsCancellationRequested && ex.SocketErrorCode == SocketError.MessageSize && connection != null) {
+                        UtpLog.Debug ($"uTP send failed: {ex.SocketErrorCode}");
+                        connection.HandleLocalSendMessageSize (packet);
+                    } catch (SocketException ex) when (!token.IsCancellationRequested) {
+                        UtpLog.Debug ($"uTP send failed: {ex.SocketErrorCode}");
+                    } finally {
+                        sendCompleted?.Invoke ();
+                        packet.Dispose ();
+                    }
+                  }
+                }
+            } catch (OperationCanceledException) {
+            } catch (ObjectDisposedException) {
+            } catch (Exception ex) {
+                UtpLog.Error ($"uTP send loop failed: {ex.Message}");
+            } finally {
+                while (SendQueue.Reader.TryRead (out var pending)) {
+                    pending.sendCompleted?.Invoke ();
+                    pending.packet.Dispose ();
+                }
+            }
+        }
+
+        async Task PruneStaleConnectionsLoopAsync (CancellationToken token)
+        {
+            try {
+                while (true) {
+                    await Task.Delay (StaleConnectionPruneInterval, token);
+                    PruneStaleConnections ();
+                }
+            } catch (OperationCanceledException) when (token.IsCancellationRequested) {
+            }
+        }
+
+        internal void ProcessDatagram (IPEndPoint remote, byte[] owned)
+        {
+            if (!IsUtpDatagram (owned))
+                return;
+
+            ProcessDatagram (remote, owned.AsSpan (), Clock.Microseconds);
+        }
+
+        void ListenerMessageReceived (ReadOnlySpan<byte> datagram, IPEndPoint remote)
+        {
+            if (!started || !IsUtpDatagram (datagram))
+                return;
+
+            ProcessDatagram (remote, datagram, Clock.Microseconds);
+        }
+
+        static bool IsUtpDatagram (ReadOnlySpan<byte> datagram)
+            => datagram.Length >= UtpPacket.HeaderSize
+                && datagram.Length <= UtpMemoryPool.BufferSize
+                && (datagram[0] & 0x0f) == UTP_VERSION;
+
+        void ProcessDatagram (IPEndPoint remote, ReadOnlySpan<byte> datagram, uint receivedAtMicroseconds)
+        {
+            var releaser = UtpMemoryPool.Default.Rent (out Memory<byte> memory);
+            memory = memory.Slice (0, datagram.Length);
+            datagram.CopyTo (memory.Span);
+            var pkt = new UtpPacket (memory);
+
+            if (pkt.Version != UTP_VERSION) {
+                releaser.Dispose ();
+                return;
+            }
+
+            switch (pkt.Type) {
+                case PacketType.Syn:
+                    if (!Enabled)
+                        break;
+                    TrackBackgroundTask (HandleSynAsync (remote, pkt, releaser, receivedAtMicroseconds));
+                    return;
+
+                case PacketType.Data:
+                case PacketType.State:
+                case PacketType.Fin:
+                case PacketType.Reset:
+                    RouteToExisting (remote, pkt, releaser, receivedAtMicroseconds);
+                    return;
+            }
+
+            releaser.Dispose ();
+        }
+
+        async Task HandleSynAsync (IPEndPoint remote, UtpPacket syn, BufferReleaser releaser, uint receivedAtMicroseconds)
+        {
+            try {
+            ushort initiatorConnIdRecv = syn.ConnectionId;
+            ushort ourConnIdRecv = (ushort) (initiatorConnIdRecv + 1);
+
+            var key = (remote, ourConnIdRecv);
+
+            // Idempotent only for an exact retransmission of the original SYN.
+            if (_connections.TryGetValue (key, out var existing)) {
+                if (existing.Connection.IsClosedOrReset) {
+                    _connections.TryRemove (key, out _);
+                } else if (existing.IncomingSynSequenceNumber == syn.SequenceNumber) {
+                    existing.LastActivityMicroseconds = Clock.Microseconds;
+                    await existing.Connection.SendSynAck (syn.SequenceNumber);
+                    return;
+                } else {
+                    UtpLog.Debug ($"Ignored colliding uTP SYN from {remote} / {initiatorConnIdRecv}");
+                    return;
+                }
+            }
+
+            if (IncomingConnectionCount >= TransportSettings.MaxIncomingSynConnections) {
+                UtpLog.Debug ($"Dropped uTP SYN from {remote} / {initiatorConnIdRecv}: incoming SYN capacity reached");
+                return;
+            }
+
+            var connection = new UtpPeerConnection (
+                sendingChannel: SendQueue.Writer,
+                remote: remote,
+                connIdSend: initiatorConnIdRecv,
+                connIdRecv: ourConnIdRecv,
+                initialAckNumber: syn.SequenceNumber,
+                clock: Clock,
+                listener: this,
+                transportSettings: TransportSettings);
+
+            connection.InitializeFromSyn (syn, receivedAtMicroseconds);
+
+            if (!_connections.TryAdd (key, new RegisteredConnection (connection, Clock.Microseconds, syn.SequenceNumber))) {
+                connection.Dispose ();
+                if (_connections.TryGetValue (key, out existing) && existing.IncomingSynSequenceNumber == syn.SequenceNumber) {
+                    existing.LastActivityMicroseconds = Clock.Microseconds;
+                    await existing.Connection.SendSynAck (syn.SequenceNumber);
+                } else {
+                    UtpLog.Debug ($"Ignored colliding uTP SYN from {remote} / {initiatorConnIdRecv}");
+                }
+                return;
+            }
+
+            await connection.SendSynAck (syn.SequenceNumber);
+
+            ConnectionReceived?.Invoke (this, new PeerConnectionEventArgs (connection, null));
+            } finally {
+                releaser.Dispose ();
+            }
+        }
+
+        void RouteToExisting (IPEndPoint remote, UtpPacket pkt, BufferReleaser releaser, uint receivedAtMicroseconds)
+        {
+            var key = pkt.Type == PacketType.Reset
+                ? FindResetKey (remote, pkt.ConnectionId)
+                : (remote, pkt.ConnectionId);
+
+            if (_connections.TryGetValue (key, out var registration)) {
+                var conn = registration.Connection;
+                if (!conn.IsClosedOrReset && conn.IsValidPacketForCurrentState (pkt)) {
+                    registration.LastActivityMicroseconds = Clock.Microseconds;
+                    if (!conn.Receive (pkt, releaser, receivedAtMicroseconds))
+                        releaser.Dispose ();
+                    return;
+                }
+
+                if (!conn.IsClosedOrReset && conn.IsHarmlessStalePacket (pkt)) {
+                    registration.LastActivityMicroseconds = Clock.Microseconds;
+                    releaser.Dispose ();
+                    return;
+                }
+
+                if (conn.IsClosedOrReset)
+                    _connections.TryRemove (key, out _);
+            }
+
+            SendResetForUnknownNonSyn (remote, pkt);
+            releaser.Dispose ();
+        }
+
+        (EndPoint remote, ushort connectionIdReceive) FindResetKey (IPEndPoint remote, ushort connectionId)
+        {
+            var key = ((EndPoint) remote, connectionId);
+            if (_connections.TryGetValue (key, out _))
+                return key;
+
+            key = (remote, unchecked((ushort) (connectionId + 1)));
+            if (_connections.TryGetValue (key, out var plusOne) && plusOne.Connection.ConnectionIdSend == connectionId)
+                return key;
+
+            key = (remote, unchecked((ushort) (connectionId - 1)));
+            if (_connections.TryGetValue (key, out var minusOne) && minusOne.Connection.ConnectionIdSend == connectionId)
+                return key;
+
+            return ((EndPoint) remote, connectionId);
+        }
+
+        internal bool TryRegisterOutgoing (UtpPeerConnection connection)
+            => _connections.TryAdd ((connection.EndPoint, connection.ConnectionIdReceive), new RegisteredConnection (connection, Clock.Microseconds));
+
+        internal void Unregister (UtpPeerConnection connection)
+            => _connections.TryRemove ((connection.EndPoint, connection.ConnectionIdReceive), out _);
+
+        internal bool IsRegistered (UtpPeerConnection connection)
+            => _connections.ContainsKey ((connection.EndPoint, connection.ConnectionIdReceive));
+
+        internal bool ApplyMtuFeedback (IPEndPoint remote, ushort connectionId, int nextHopMtu)
+        {
+            var key = ((EndPoint) remote, connectionId);
+            if (!_connections.TryGetValue (key, out var registration))
+                key = FindResetKey (remote, connectionId);
+
+            if (!_connections.TryGetValue (key, out registration))
+                return false;
+
+            registration.Connection.ApplyMtuFeedback (nextHopMtu);
+            return true;
+        }
+
+        internal Task ProcessScheduledEventsForTests ()
+            => Scheduler.ProcessDueEventsForTests ();
+
+        internal static int RecentResetCapacityForTests => MaxRecentResetEntries;
+
+        internal int RegisteredConnectionCount => _connections.Count;
+
+        int IncomingConnectionCount {
+            get {
+                int count = 0;
+                foreach (var connection in _connections.Values) {
+                    if (connection.Connection.IsIncoming && !connection.Connection.IsClosedOrReset)
+                        count++;
+                }
+                return count;
+            }
+        }
+
+        internal void PruneStaleConnections ()
+        {
+            var now = Clock.Microseconds;
+            var staleAfter = (uint) StaleConnectionTimeout.TotalMicros ();
+            foreach (var pair in _connections) {
+                var connection = pair.Value.Connection;
+                if (connection.IsClosedOrReset || unchecked(now - pair.Value.LastActivityMicroseconds) >= staleAfter) {
+                    if (_connections.TryRemove (pair.Key, out _)) {
+                        UtpLog.Debug ($"Pruned stale uTP connection {pair.Key.remoteEndpoint} / {pair.Key.remoteConnectionReceiveId}");
+                        connection.Dispose ();
+                    }
+                }
+            }
+        }
+
+        bool ShouldSendResetForUnknownNonSyn (IPEndPoint remote, UtpPacket received)
+        {
+            if (received.Type == PacketType.Reset || received.Type == PacketType.Syn)
+                return false;
+
+            var now = Clock.Microseconds;
+            var key = new RecentResetKey (remote, received.ConnectionId, received.SequenceNumber);
+            lock (recentResetsLocker) {
+                List<RecentResetKey>? expired = null;
+                foreach (var entry in recentResets) {
+                    if (unchecked(now - entry.Value) >= RecentResetLifetimeMicroseconds)
+                        (expired ??= new List<RecentResetKey> ()).Add (entry.Key);
+                }
+
+                if (expired != null) {
+                    foreach (var expiredKey in expired)
+                        recentResets.Remove (expiredKey);
+                }
+
+                if (recentResets.ContainsKey (key))
+                    return false;
+
+                if (recentResets.Count >= MaxRecentResetEntries)
+                    return false;
+
+                recentResets[key] = now;
+                return true;
+            }
+        }
+
+        void SendResetForUnknownNonSyn (IPEndPoint remote, UtpPacket received)
+        {
+            if (!ShouldSendResetForUnknownNonSyn (remote, received))
+                return;
+
+            SendReset (remote, received);
+        }
+
+        void SendReset (IPEndPoint remote, UtpPacket received)
+        {
+            if (received.Type == PacketType.Reset)
+                return;
+
+            var releaser = UtpMemoryPool.Default.Rent (out Memory<byte> buffer);
+            buffer = buffer.Slice (0, UtpPacket.HeaderSize);
+            var reset = new UtpPacket (buffer, releaser) {
+                Type = PacketType.Reset,
+                Version = UTP_VERSION,
+                Extension = 0,
+                ConnectionId = received.ConnectionId,
+                WindowSize = INITIAL_WINDOW,
+                SequenceNumber = 0,
+                AckNumber = received.SequenceNumber
+            };
+            if (!SendQueue.Writer.TryWrite ((reset, null, remote, null)))
+                reset.Dispose ();
+        }
+    }
+}

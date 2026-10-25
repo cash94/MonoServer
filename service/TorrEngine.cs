@@ -20,6 +20,8 @@ using MonoTorrent;
 using MonoTorrent.BEncoding;
 using MonoTorrent.Client;
 using MonoTorrent.Connections;
+using MonoTorrent.Connections.Peer;
+using TorrStreamTorrServer.Utp;
 
 namespace TorrStreamTorrServer
 {
@@ -129,6 +131,9 @@ namespace TorrStreamTorrServer
         ClientEngine engine;
         MemoryStorage storage;
         DhtBootstrap dhtBoot;
+        // uTP: общий с DHT UDP-сокет на порту пиров и uTP поверх него (Utp/)
+        SharedUdpSocket udp;
+        UtpPeerConnectionListener utp;
         TrackerList trackers;
         Timer idleTimer;
         long readerSeq;
@@ -268,15 +273,39 @@ namespace TorrStreamTorrServer
             // Через WithPeerConnectionCreator: свой SocketConnector в соединения с
             // пирами MonoTorrent подставляет сам, мимо WithSocketConnectorCreator
             // DHT — свой экземпляр (DhtBootstrap): первые узлы и перезапуск поиска
+            // uTP (Utp/UtpTransport.cs): UDP-сокет порта пиров — общий для DHT и
+            // uTP; входящие — TCP и uTP, исходящие — сначала uTP, затем TCP.
+            // Выключен (EnableUTP) — только TCP, без перезапуска
+            udp = new SharedUdpSocket(new IPEndPoint(IPAddress.Any, port));
+            utp = new UtpPeerConnectionListener(udp) { Enabled = Settings.EnableUTP };
+            UtpLog.Sink = log;
             var factories = Factories.Default.WithPieceWriterCreator(_ => storage)
                 .WithDhtCreator(dhtBoot.Create)
-                .WithPeerConnectionCreator("ipv4", uri => new MonoTorrent.Connections.Peer.SocketPeerConnection(uri, new PeerConnector()))
-                .WithPeerConnectionCreator("ipv6", uri => new MonoTorrent.Connections.Peer.SocketPeerConnection(uri, new PeerConnector()));
+                .WithDhtListenerCreator(_ => new SharedUdpDhtListener(udp))
+                .WithPeerConnectionListenerCreator(endPoint => new CompositePeerListener(new PeerConnectionListener(endPoint), utp))
+                .WithPeerConnectionCreator("ipv4", PeerConnection)
+                .WithPeerConnectionCreator("ipv6", PeerConnection);
             // HTTP-трекеры и веб-сиды — через свой обработчик службы, если он есть (Http.cs):
             // на Android штатный HttpClient не умеет HTTPS
             if (Http.HandlerFactory != null)
                 factories = factories.WithHttpClientCreator(family => Http.Client(TimeSpan.FromSeconds(30), family));
             return new ClientEngine(b.ToSettings(), factories);
+        }
+
+        IPeerConnection PeerConnection(Uri uri)
+        {
+            return new HybridPeerConnection(uri, utp, () => new SocketPeerConnection(uri, new PeerConnector()));
+        }
+
+        static readonly PropertyInfo PeerConnectionProp =
+            typeof(PeerId).GetProperty("Connection", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        /// <summary>Транспорт пира — «uTP» или «TCP» (соединение у PeerId закрытое — через отражение)</summary>
+        static string PeerTransport(PeerId p)
+        {
+            object c = null;
+            try { c = PeerConnectionProp?.GetValue(p); } catch { }
+            return c is UtpPeerConnection || (c is HybridPeerConnection h && h.IsUtp) ? "uTP" : "TCP";
         }
 
         TorrentSettings TorrentSettingsFor()
@@ -306,6 +335,7 @@ namespace TorrStreamTorrServer
             List<TorrEntry> active;
             lock (sync) active = entries.Values.Where(e => e.Store != null).ToList();
             foreach (var e in active) e.Store.Capacity = Settings.CacheSize;
+            if (utp != null) utp.Enabled = Settings.EnableUTP;
             // Порт, DHT, скорость — в движке; без перезапуска службы — для новых торрентов
             if (engine != null)
             {
@@ -1487,6 +1517,7 @@ namespace TorrStreamTorrServer
                                 .Prop("Requests", p.AmRequestingPiecesCount)
                                 .Prop("Choking", p.IsChoking).Prop("Interested", p.AmInterested)
                                 .Prop("Encryption", p.EncryptionType.ToString())
+                                .Prop("Transport", PeerTransport(p))
                                 .Prop("Incoming", p.ConnectionDirection == Direction.Incoming)
                                 .EndObj();
                         }

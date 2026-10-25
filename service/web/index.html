@@ -611,6 +611,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       var p = peers[i], flags = [];
       if (p.Seeder) flags.push('сид');
       if (p.Incoming) flags.push('входящий');
+      if (p.Transport === 'uTP') flags.push('uTP');
       if (p.Choking) flags.push('choke');
       if (p.Encryption && p.Encryption !== 'None' && p.Encryption !== 'PlainText') flags.push(p.Encryption);
       html += '<tr><td class="mono">' + esc(p.Address) + '</td><td class="hide-sm">' + esc(p.Client) + '</td>' +
@@ -822,7 +823,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
   var SET_LABELS = {
     CacheSize: 'Кэш на торрент, МБ', ReaderReadAHead: 'Вперёд от читателя, %', PreloadCache: 'Предзагрузка, % кэша',
     ConnectionsLimit: 'Пиров на торрент', TorrentDisconnectTimeout: 'Закрыть без читателей, с', PeersListenPort: 'Порт пиров',
-    EnableDHT: 'DHT', EnableUPNP: 'UPnP', DownloadRateLimit: 'Ограничение ↓, КБ/с', UploadRateLimit: 'Ограничение ↑, КБ/с',
+    EnableDHT: 'DHT', EnableUPNP: 'UPnP', EnableUTP: 'uTP (пиры по UDP)', DownloadRateLimit: 'Ограничение ↓, КБ/с', UploadRateLimit: 'Ограничение ↑, КБ/с',
     RetrackersMode: 'Ретрекеры (0 — нет, 1 — добавлять)',
     ResponsiveMode: 'Отдавать блоки до проверки куска'
   };
@@ -834,6 +835,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       var html = '';
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i], v = s[k], label = SET_LABELS[k] || k, input;
+        if (k === 'DisableUTP') continue;   // то же, что EnableUTP, — для клиентов TorrServer
         if (typeof v === 'boolean') input = '<input type="checkbox" data-k="' + k + '"' + (v ? ' checked' : '') + '>';
         else if (typeof v === 'number') input = '<input type="number" data-k="' + k + '" value="' + (k === 'CacheSize' ? Math.round(v / 1048576) : v) + '">';
         else if (v === null || typeof v === 'string') input = '<input type="text" data-k="' + k + '" value="' + esc(v == null ? '' : v) + '">';

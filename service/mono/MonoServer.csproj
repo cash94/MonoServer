@@ -26,6 +26,7 @@
   <ItemGroup>
     <Compile Include="*.cs" />
     <Compile Include="../*.cs" Exclude="../Program.cs" />
+    <Compile Include="../Utp/*.cs" />
     <EmbeddedResource Include="../web/index.html" LogicalName="web.index.html" />
     <PackageReference Include="MonoTorrent" Version="3.0.2" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />

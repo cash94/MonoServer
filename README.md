@@ -192,6 +192,16 @@ Termux (`service/mono/OpenSslHttpHandler.cs`, `Http.cs`), с корневыми
   недоступным пирам висели по 2 минуты — новых подключений не было. Попыток
   сразу — до 48 (`MaximumHalfOpenConnections`): большинство адресов с трекеров
   недоступны, и при 16 попытках по 8 с список перебирался минутами.
+- `Utp/` — uTP (BEP 29): в MonoTorrent 3.0.2 только TCP, uTP есть лишь в его
+  master (net8.0, в NuGet не вышел) — перенесён сюда под C# 8 и netstandard2.0,
+  поэтому работает во всех сборках (Tizen, Android, Linux, Windows). UDP-сокет
+  порта пиров общий для DHT и uTP (`SharedUdpSocket.cs`, пакеты делятся по
+  первому байту). Входящие — TCP и uTP; исходящие (`HybridPeerConnection`) —
+  сначала uTP, через 0,7 с без ответа параллельно TCP, что подключится первым.
+  При закрытии соединения пиру уходит ST_RESET (в master его нет, и libtorrent
+  отбрасывал новое подключение как «duplicate peer-id»). Настройка `EnableUTP`
+  (у клиентов TorrServer — `DisableUTP`) действует сразу, без перезапуска; в
+  списке пиров `/cache` — поле `Transport`.
 - `HttpApi.cs` — `/echo` (`MatriX.136 (TorrStream …)`), `/torrents`
   (add/get/set/rem/list/drop/wipe), `/stream?link=…&index=N&play|stat|m3u|preload`,
   `/play/<хэш>/<N>`, `/cache`, `/settings` (имена BTSets), `/download/<МБ>`;
@@ -214,8 +224,7 @@ Termux (`service/mono/OpenSslHttpHandler.cs`, `Http.cs`), с корневыми
 `app/` — страница пакета (запуск службы, состояние). `tools/make_icon.py` — значок.
 
 Не сделано: `/ffp` (ffprobe TorrServer), `/viewed` (отвечает пустым списком),
-пароль, кэш на диске, uTP (в MonoTorrent 3.0.2 только TCP — пиры за NAT,
-доступные лишь по uTP, остаются «Unreachable»). Пиру, который просит уже вытесненный кусок, MonoTorrent отдаёт не
+пароль, кэш на диске. Пиру, который просит уже вытесненный кусок, MonoTorrent отдаёт не
 те данные (он не проверяет, есть ли кусок); пир отбросит их по хэшу.
 
 ## Сборка

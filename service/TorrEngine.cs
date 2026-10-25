@@ -342,7 +342,8 @@ namespace TorrStreamTorrServer
                         Hash = item.Str("hash"),
                         Link = item.Str("link"),
                         Title = item.Str("title") ?? "",
-                        Poster = item.Str("poster") ?? "",
+                        // База от прежних версий могла сохранить что угодно — только http(s)
+                        Poster = PosterGuard.ValidUrl(item.Str("poster")) ? item.Str("poster") : "",
                         Data = item.Str("data") ?? "",
                         Category = item.Str("category") ?? "",
                         Name = item.Str("name") ?? "",
@@ -447,7 +448,6 @@ namespace TorrStreamTorrServer
                     e.Link = new MagnetLink(torrent.InfoHashes, torrent.Name, torrent.AnnounceUrls.SelectMany(t => t).Distinct().ToList(),
                         torrent.HttpSeeds.Select(u => u.ToString()), torrent.Size).ToV1String();
                 if (!string.IsNullOrEmpty(title)) e.Title = title;
-                if (!string.IsNullOrEmpty(poster)) e.Poster = poster;
                 if (!string.IsNullOrEmpty(data)) e.Data = data;
                 if (!string.IsNullOrEmpty(category)) e.Category = category;
                 if (string.IsNullOrEmpty(e.Title)) e.Title = (magnet != null ? magnet.Name : torrent?.Name) ?? hash;
@@ -456,6 +456,7 @@ namespace TorrStreamTorrServer
                 e.LastActiveMs = Now();
             }
             if (save) SaveDb();
+            ApplyPoster(e, poster);
             await EnsureActiveAsync(e, magnet, torrent).ConfigureAwait(false);
             return e;
         }
@@ -839,11 +840,49 @@ namespace TorrStreamTorrServer
             lock (sync)
             {
                 if (title != null) e.Title = title;
-                if (poster != null) e.Poster = poster;
+                if (poster == "") e.Poster = "";   // убрать постер можно без проверки
                 if (data != null) e.Data = data;
                 if (category != null) e.Category = category;
             }
             if (e.InDb) SaveDb();
+            ApplyPoster(e, poster);
+        }
+
+        /// <summary>
+        /// Новый постер — только после проверки (PosterGuard, как CheckImgUrl у
+        /// TorrServer), в фоне: добавление торрента не ждёт до 5 с. Пока идёт
+        /// проверка, остаётся прежний постер
+        /// </summary>
+        void ApplyPoster(TorrEntry e, string poster)
+        {
+            if (string.IsNullOrEmpty(poster)) return;
+            string existing;
+            lock (sync) existing = e.Poster ?? "";
+            if (poster == existing) return;
+            if (!PosterGuard.ValidUrl(poster))
+            {
+                log(e.Hash + ": постер отклонён — не http(s)-ссылка");
+                return;
+            }
+            Task.Run(async () =>
+            {
+                var r = await PosterGuard.CheckAsync(poster).ConfigureAwait(false);
+                // Как в TorrServer: не картинка — нет; не проверили (сеть) — только если прежнего не было
+                bool accept = r.Ok && (existing == "" || r.Verified);
+                if (!accept)
+                {
+                    log(e.Hash + ": постер не принят — " + r.Reason + (existing != "" ? ", оставлен прежний" : ""));
+                    return;
+                }
+                bool save;
+                lock (sync)
+                {
+                    if ((e.Poster ?? "") != existing) return;   // пока проверяли, поставили другой
+                    e.Poster = poster;
+                    save = e.InDb;
+                }
+                if (save) SaveDb();
+            });
         }
 
         /// <summary>

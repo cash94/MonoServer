@@ -41,7 +41,7 @@ ROOT = os.path.dirname(ANDROID)
 JNI = os.path.join(ANDROID, 'app', 'src', 'main', 'jniLibs')
 ASSETS = os.path.join(ANDROID, 'app', 'src', 'main', 'assets')
 WORK = os.path.join(ANDROID, 'build', 'runtime')
-SERVICE = os.path.join(ROOT, 'service', 'mono')
+SERVICE = os.path.join(ROOT, 'service', 'mono', 'MonoServer.csproj')
 ASMREFS = os.path.join(ANDROID, 'tools', 'asmrefs')
 
 MIRROR = 'https://packages.termux.dev/apt/termux-main'

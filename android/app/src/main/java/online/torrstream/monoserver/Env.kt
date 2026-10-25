@@ -35,7 +35,7 @@ object Env {
     /** Распакованный torrserver.zip: mono/ (сборки, конфиги) и app/ (служба) */
     fun runtime(ctx: Context) = File(ctx.filesDir, "runtime")
     fun monoRoot(ctx: Context) = File(runtime(ctx), "mono")
-    fun serviceExe(ctx: Context) = File(runtime(ctx), "app/TorrServer.exe")
+    fun serviceExe(ctx: Context) = File(runtime(ctx), "app/MonoServer.exe")
     /** Данные службы: база торрентов, settings.json, кэш DHT и метаданных */
     fun dataDir(ctx: Context) = File(ctx.filesDir, "data").apply { mkdirs() }
     fun settingsFile(ctx: Context) = File(dataDir(ctx), "settings.json")

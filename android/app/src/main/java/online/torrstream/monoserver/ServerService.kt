@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * MonoServer: служба TorrServer (C#, MonoTorrent) под Mono — дочерний процесс
- * `libmono.so TorrServer.exe <порт> <данные>`, к нему подключаются TorrStream, Lampa и
+ * `libmono.so MonoServer.exe <порт> <данные>`, к нему подключаются TorrStream, Lampa и
  * другие клиенты TorrServer по http://<IP>:8099.
  *
  * Foreground-сервис с уведомлением, плюс WakeLock и WifiLock: с погасшим экраном

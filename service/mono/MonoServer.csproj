@@ -1,6 +1,6 @@
 <!--
   Служба для Android: те же исходники, что в пакете для Tizen, под Mono из Termux
-  (приложение android/ запускает её как отдельную программу: mono TorrServer.exe).
+  (приложение android/ запускает её как отдельную программу: mono MonoServer.exe).
   .NET Framework 4.7.2 — профиль, который есть в Mono; MonoTorrent берёт сборку net472.
   Сборка: python android/tools/fetch-runtime.py (или dotnet build -c Release)
 -->
@@ -9,7 +9,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net472</TargetFramework>
-    <AssemblyName>TorrServer</AssemblyName>
+    <AssemblyName>MonoServer</AssemblyName>
     <RootNamespace>TorrStreamTorrServer</RootNamespace>
     <!-- Как у сборки для Tizen: исходники общие и должны собираться C# 8 -->
     <LangVersion>8.0</LangVersion>
@@ -17,7 +17,7 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <!-- SSL_read/SSL_write в буфер со смещением (OpenSsl.cs) -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- TorrServer.exe.config с перенаправлениями версий (System.Memory и др.) — Mono их читает -->
+    <!-- MonoServer.exe.config с перенаправлениями версий (System.Memory и др.) — Mono их читает -->
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
     <DebugType>none</DebugType>

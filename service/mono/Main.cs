@@ -5,6 +5,7 @@
 // займёт порт, если процесс приложения убит; SIGTERM — запасной путь.
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -12,6 +13,11 @@ namespace TorrStreamTorrServer
 {
     static class MonoMain
     {
+        // Выход сразу, без остановки потоков Mono: поток stdin стоит в read(), и
+        // Environment.Exit ждал бы его и писал «Some threads failed to suspend»
+        [DllImport("libc", EntryPoint = "_exit")]
+        static extern void Exit(int code);
+
         static void Main(string[] args)
         {
             // Mono берёт кодировку консоли из LANG — журнал по-русски должен идти в UTF-8 всегда
@@ -62,6 +68,8 @@ namespace TorrStreamTorrServer
             var done = new Thread(() => { try { host.Stop(); } catch { } }) { IsBackground = true };
             done.Start();
             done.Join(5000);
+            Console.Out.Flush();
+            try { Exit(0); } catch { }
             Environment.Exit(0);
         }
     }

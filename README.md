@@ -1,7 +1,7 @@
 # MonoServer
 
-TorrServer на C# (MonoTorrent): на телевизоре Samsung (Tizen), в Linux и
-Windows — служба с API [TorrServer](https://github.com/YouROK/TorrServer)
+TorrServer на C# (MonoTorrent): на телевизоре Samsung (Tizen), в Linux,
+Windows и Android — служба с API [TorrServer](https://github.com/YouROK/TorrServer)
 MatriX на порту 8090. До 1.0.18 называлась TorrServer-Tizen.
 [TorrStream](https://github.com/cash94/TorrStream-Tizen), Lampa и другие
 клиенты видят её как обычный TorrServer.
@@ -13,7 +13,8 @@ MatriX на порту 8090. До 1.0.18 называлась TorrServer-Tizen.
 [no-cover/torr-streaming](https://github.com/no-cover/torr-streaming): обе
 занимают порт 8090, ставьте одну.
 
-Та же служба есть и для Linux (x64, arm64) — без установки .NET.
+Та же служба есть и для Linux (x64, arm64) и Windows — без установки .NET, и
+приложением для Android (порт 8099).
 
 ## Установка на телевизор
 
@@ -105,11 +106,31 @@ ARM — `MonoServer-linux-arm64.tar.gz` (64-битная система). Пор
 запуске спросит разрешение для сети — разрешите для частных сетей, иначе
 телевизор и телефон до службы не достучатся.
 
-Android: эта служба там не нужна — оригинальный
-[TorrServer](https://github.com/YouROK/TorrServer) запускается на Android и
-Android TV (arm64 и armv7) штатно. Сборку .NET под Android (`linux-bionic`)
-Microsoft выпускает только для arm64, и ей нужен системный OpenSSL для
-проверки хэшей, которого у обычного приложения Android нет.
+## Android (телефоны, приставки, телевизоры)
+
+`MonoServer-Android-armeabi-v7a.apk` (большинство приставок и Fire TV, 32-битные
+системы) или `MonoServer-Android-arm64-v8a.apk` (64-битные телефоны) из
+[релизов](../../releases/latest). Служба там на порту **8099** — не мешает
+оригинальному TorrServer (8090), если он тоже стоит; порт меняется в настройках.
+
+В приложении: адрес сервера для TorrStream, Lampa и других клиентов, запуск и
+остановка, **Настройки** (кэш, предзагрузка, подключения, порты, DHT, UPnP,
+ограничения скорости, ретрекеры — те же, что у TorrServer), **Журнал**,
+веб-интерфейс службы. Работает и с пультом.
+
+Работа в фоне: на главном экране — «Отключить экономию батареи» и «Спец.
+возможности» → включить «MonoServer — работа в фоне». Пока эта служба включена,
+система не выгружает приложение, а после перезагрузки она же запускает сервер
+(на приставках, где не приходит сигнал о загрузке). Экран она не читает.
+
+Как устроено: служба та же (`service/*.cs`, сборка `service/mono` под .NET
+Framework 4.7.2), запускается отдельной программой под **Mono из пакетов
+Termux** — он собран под Android (bionic) для armeabi-v7a, arm64-v8a и x86_64.
+.NET от Microsoft для Android-процессов есть только для arm64, в Termux .NET тоже
+без 32-битного ARM. Mono в Termux собран без TLS, поэтому HTTPS службы
+(ретрекеры, постеры, .torrent по ссылке, HTTP-трекеры) — через OpenSSL из того же
+Termux (`service/mono/OpenSslHttpHandler.cs`, `Http.cs`), с корневыми
+сертификатами Android. Сборка APK — `android/` (см. ниже).
 
 ## Как устроено
 
@@ -206,6 +227,24 @@ python tools/build.py [--version 1.0.18] [--linux]
 `dist/`. Проверка без телевизора: `cd service/pc && dotnet run -c Release -- 18090`.
 
 Тег `v*` → workflow `build.yml`: версия из тега → `tools/build.py --linux` →
-релиз с `MonoServer-Tizen.wgt` и `MonoServer-linux-*.tar.gz`.
+релиз с `MonoServer-Tizen.wgt`, `MonoServer-linux-*.tar.gz`, `MonoServer-windows-*.zip`
+и `MonoServer-Android-*.apk`.
 
-Сторонний код и лицензии — `service/res/THIRD-PARTY-NOTICES.txt` (MonoTorrent, MIT).
+APK для Android (нужны .NET SDK 8+, JDK 11+ и Android SDK — `ANDROID_HOME` или
+`android/local.properties`):
+
+```
+python android/tools/fetch-runtime.py --abi armeabi-v7a --abi arm64-v8a
+cd android && ./gradlew :app:assembleRelease
+```
+
+`fetch-runtime.py` собирает `service/mono`, берёт Mono и OpenSSL из пакетов Termux
+(только библиотеки, нужные по DT_NEEDED) и сборки Mono, на которые ссылается служба:
+`android/app/src/main/jniLibs/<abi>` и `assets/torrserver.zip`. Для проверки в
+эмуляторе — `--abi x86_64` и `assembleDebug`. В CI release-APK подписывается ключом
+из секретов `KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` (те же,
+что у TorrStream-AndroidServer); без них в релиз идут debug-APK — каждый раз с
+новым ключом, поверх прежней версии они не ставятся.
+
+Сторонний код и лицензии — `service/res/THIRD-PARTY-NOTICES.txt` (MonoTorrent, MIT);
+в APK для Android ещё Mono (MIT), OpenSSL (Apache 2.0), krb5 и zlib — из пакетов Termux.

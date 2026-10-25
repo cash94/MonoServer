@@ -1,5 +1,8 @@
 # Сборка по тегу v* (git tag v1.0.9 && git push origin v1.0.9): версия из тега
-# → tools/build.py --linux --windows → релиз MonoServer: wgt и архивы для Linux и Windows.
+# → tools/build.py --linux --windows → релиз MonoServer: wgt и архивы для Linux и Windows,
+# и APK для Android (android/tools/fetch-runtime.py + Gradle). APK подписывается ключом
+# из секретов KEYSTORE_B64 (base64 файла ключа), KEYSTORE_PASSWORD, KEY_ALIAS,
+# KEY_PASSWORD; без них — debug-APK (ключ каждый раз новый, см. README).
 # Пакет для ТВ без подписи: сертификат Samsung привязан к телевизору (DUID),
 # подписывает тот, кто ставит, — Apps2Samsung или Tizen Studio (см. README).
 # Постоянные имена — releases/latest/download/MonoServer-Tizen.wgt и т. п.
@@ -31,6 +34,36 @@ jobs:
           python3 tools/build.py $VER --linux --windows
           ls -la dist
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          python3 android/tools/fetch-runtime.py --abi armeabi-v7a --abi arm64-v8a
+          cd android
+          chmod +x gradlew
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+            ./gradlew :app:assembleRelease --no-daemon --console=plain
+            KIND=release
+          else
+            echo "::warning::Нет секрета KEYSTORE_B64 — APK подписан debug-ключом и поверх прежней версии не встанет"
+            ./gradlew :app:assembleDebug --no-daemon --console=plain
+            KIND=debug
+          fi
+          for abi in arm64-v8a armeabi-v7a; do
+            cp "app/build/outputs/apk/$KIND/app-$abi-$KIND.apk" "../dist/MonoServer-Android-$abi.apk"
+          done
+          ls -la ../dist
+
       - name: Релиз
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -38,9 +71,9 @@ jobs:
         run: |
           PRE=""
           case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease";; esac
-          gh release create "$GITHUB_REF_NAME" dist/MonoServer-Tizen.wgt dist/MonoServer-linux-x64.tar.gz dist/MonoServer-linux-arm64.tar.gz dist/MonoServer-windows-x64.zip dist/MonoServer-windows-arm64.zip $PRE \
+          gh release create "$GITHUB_REF_NAME" dist/MonoServer-Tizen.wgt dist/MonoServer-linux-x64.tar.gz dist/MonoServer-linux-arm64.tar.gz dist/MonoServer-windows-x64.zip dist/MonoServer-windows-arm64.zip dist/MonoServer-Android-armeabi-v7a.apk dist/MonoServer-Android-arm64-v8a.apk $PRE \
             --title "MonoServer ${GITHUB_REF_NAME#v}" \
-            --notes "MonoServer — TorrServer на C# (MonoTorrent) с API TorrServer MatriX на порту 8090: Samsung Tizen (и 5.5, где официальный TorrServer не запускается), Linux, Windows. Tizen: MonoServer-Tizen.wgt через Apps2Samsung (Custom WGT) или Tizen Studio, ставится поверх прежнего TorrServer-Tizen.wgt; в TorrStream — «Использовать TorrServer, установленный на этом устройстве». Linux (x64, arm64) — служба systemd одной командой: mkdir -p ~/monoserver && cd ~/monoserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o monoserver.sh && bash monoserver.sh install; обновить (и перенести службу torrserver-tizen): curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o /tmp/monoserver.sh && bash /tmp/monoserver.sh update. Windows (x64, arm64): распакуйте MonoServer-windows-*.zip и запустите monoserver.cmd (monoserver.cmd install — автозапуск при входе). Подробнее — в README."
+            --notes "MonoServer — TorrServer на C# (MonoTorrent) с API TorrServer MatriX на порту 8090: Samsung Tizen (и 5.5, где официальный TorrServer не запускается), Linux, Windows. Tizen: MonoServer-Tizen.wgt через Apps2Samsung (Custom WGT) или Tizen Studio, ставится поверх прежнего TorrServer-Tizen.wgt; в TorrStream — «Использовать TorrServer, установленный на этом устройстве». Linux (x64, arm64) — служба systemd одной командой: mkdir -p ~/monoserver && cd ~/monoserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o monoserver.sh && bash monoserver.sh install; обновить (и перенести службу torrserver-tizen): curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o /tmp/monoserver.sh && bash /tmp/monoserver.sh update. Windows (x64, arm64): распакуйте MonoServer-windows-*.zip и запустите monoserver.cmd (monoserver.cmd install — автозапуск при входе). Android (телефоны, приставки, ТВ): MonoServer-Android-armeabi-v7a.apk (большинство приставок, Fire TV) или -arm64-v8a.apk, служба на порту 8099 — не мешает оригинальному TorrServer; настройки и журнал — в приложении, для работы в фоне — «Спец. возможности». Подробнее — в README."
 
       - name: Артефакт
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}

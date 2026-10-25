@@ -51,7 +51,7 @@ def main():
             break
         except OSError:
             pass
-    draw.text((158, 62), 'Torr', fill=(255, 255, 255), font=font)
+    draw.text((158, 62), 'Mono', fill=(255, 255, 255), font=font)
     draw.text((158, 96), 'Server', fill=(255, 140, 0), font=font)
     save(banner, 'drawable-xhdpi', 'banner.png')
 

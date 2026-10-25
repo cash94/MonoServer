@@ -29,7 +29,7 @@ namespace TorrStreamTorrServer
             {
                 Tizen.Log.Error(LogTag, "start: " + e);
                 // Чаще всего — порт 8090 уже занят другим TorrServer (служба no-cover)
-                ShowToast("TorrStream TorrServer не запустился: " + e.Message);
+                ShowToast("MonoServer не запустился: " + e.Message);
             }
         }
 

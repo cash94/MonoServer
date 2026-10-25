@@ -25,7 +25,7 @@ namespace TorrStreamTorrServer
 
         static HttpClient CreateClient()
         {
-            var c = new HttpClient { Timeout = TimeSpan.FromMilliseconds(TimeoutMs) };
+            var c = Http.Client(TimeSpan.FromMilliseconds(TimeoutMs));
             // Некоторые хостинги картинок (fastpic) отвечают 404 «неизвестному» агенту
             c.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Mozilla/5.0");
             return c;

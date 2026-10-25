@@ -20,7 +20,7 @@ namespace TorrStreamTorrServer
                 Journal.Add(m);
                 if (sink != null) sink(m);
             };
-            log("TorrStream TorrServer " + TorrEngine.ServiceVersion + ", " + System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
+            log("MonoServer " + TorrEngine.ServiceVersion + ", " + System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
             // HTTP — первым: занят порт — движок и не нужен
             Engine = new TorrEngine(dataDir, log);
             Api = new HttpApi(Engine, port, log, Journal);

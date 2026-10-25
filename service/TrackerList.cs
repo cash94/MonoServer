@@ -92,7 +92,7 @@ namespace TorrStreamTorrServer
                 var t = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    using (var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(TimeoutMs) })
+                    using (var http = Http.Client(TimeSpan.FromMilliseconds(TimeoutMs)))
                     {
                         var get = http.GetStringAsync(Url);
                         // HttpClient netstandard2.0 на Tizen может застрять в DNS мимо Timeout

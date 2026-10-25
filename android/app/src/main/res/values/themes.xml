@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="colorAccent">#FF8C00</item>
+    </style>
+    <!-- Диалоги (ввод числа в настройках) — тёмные, как экраны -->
+    <style name="DialogTheme" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="colorAccent">#FF8C00</item>
+    </style>
+</resources>

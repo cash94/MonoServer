@@ -1,4 +1,4 @@
-Сторонний код в TorrStream TorrServer
+Сторонний код в MonoServer
 
 MonoTorrent 3.0.2 (https://github.com/alanmcgovern/monotorrent) — библиотеки в пакете
 (bin/MonoTorrent*.dll) и переделка StreamingPieceRequester в WindowRequester.cs.

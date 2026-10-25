@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=1920, initial-scale=1">
-<title>TorrStream TorrServer</title>
+<title>MonoServer</title>
 <!--
-  Страница пакета TorrStream TorrServer. Служба (online.torrstream.torrserver)
+  Страница пакета MonoServer. Служба (online.torrstream.torrserver)
   и так стартует вместе с телевизором; здесь — запустить её вручную (после
   установки, если система её выгрузила) и показать, работает ли она и по
   какому адресу её указать в TorrStream или Lampa. Ответ службы — по IP
@@ -27,11 +27,11 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Torr<span>Stream</span> TorrServer</h1>
+  <h1>Mono<span>Server</span></h1>
   <p class="status" id="status">Запускаю службу…</p>
   <p class="addr" id="addr"></p>
   <p class="detail" id="detail"></p>
-  <p class="hint">TorrServer работает на телевизоре в фоне и запускается вместе с ним.<br>
+  <p class="hint">MonoServer — TorrServer на телевизоре: работает в фоне и запускается вместе с ним.<br>
     В TorrStream включите «Использовать TorrServer, установленный на этом устройстве» — адрес подставится сам.<br>«Назад» — выход</p>
 </div>
 <script>
@@ -84,12 +84,12 @@
           var d = null;
           try { d = JSON.parse(x.responseText); } catch (e) { }
           if (!d) { next(); return; }
-          if (d.name !== 'TorrStream TorrServer') {
+          if (d.name !== 'MonoServer' && d.name !== 'TorrStream TorrServer') {
             show('На порту 8090 — другой TorrServer', 'ok', base.replace(/^http:\/\//, ''), 'Им и пользуйтесь; эта служба не запустилась, чтобы ему не мешать');
             return;
           }
           if (d.error) { show('Служба запущена, но торрент-движок нет', 'bad', '', d.error); return; }
-          show('TorrServer работает', 'ok', base.replace(/^http:\/\//, ''),
+          show('MonoServer работает', 'ok', base.replace(/^http:\/\//, ''),
             d.engine + ' · ' + d.runtime + ' · кэш ' + d.cache_mb + ' МБ · торрентов ' + d.torrents);
         };
         x.onerror = next;

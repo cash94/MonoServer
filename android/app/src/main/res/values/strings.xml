@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MonoServer</string>
+    <string name="channel_name">Сервер MonoServer</string>
+    <string name="notif_title">MonoServer работает</string>
+    <string name="notif_text">Адрес: %1$s</string>
+    <string name="accessibility_label">MonoServer — работа в фоне</string>
+    <string name="accessibility_description">Не даёт системе выгружать MonoServer (TorrServer) в фоне и запускает его после включения устройства. Экран и ваши действия не читает.</string>
+</resources>

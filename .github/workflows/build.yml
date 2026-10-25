@@ -1,8 +1,8 @@
 # Сборка по тегу v* (git tag v1.0.9 && git push origin v1.0.9): версия из тега
-# → tools/build.py --linux → релиз с TorrServer-Tizen.wgt и архивами для Linux.
+# → tools/build.py --linux --windows → релиз MonoServer: wgt и архивы для Linux и Windows.
 # Пакет для ТВ без подписи: сертификат Samsung привязан к телевизору (DUID),
 # подписывает тот, кто ставит, — Apps2Samsung или Tizen Studio (см. README).
-# Постоянные имена — releases/latest/download/TorrServer-Tizen.wgt и т. п.
+# Постоянные имена — releases/latest/download/MonoServer-Tizen.wgt и т. п.
 # Запуск вручную (Actions → build → Run workflow) — только сборка, файлы в артефакте.
 name: build
 
@@ -38,14 +38,14 @@ jobs:
         run: |
           PRE=""
           case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease";; esac
-          gh release create "$GITHUB_REF_NAME" dist/TorrServer-Tizen.wgt dist/TorrServer-linux-x64.tar.gz dist/TorrServer-linux-arm64.tar.gz dist/TorrServer-windows-x64.zip dist/TorrServer-windows-arm64.zip $PRE \
-            --title "TorrServer для Samsung Tizen ${GITHUB_REF_NAME#v}" \
-            --notes "TorrServer на C# (MonoTorrent) с API TorrServer MatriX на порту 8090 — работает и на Tizen 5.5, где официальный TorrServer не запускается. TorrServer-Tizen.wgt ставится на телевизор через Apps2Samsung (Custom WGT) или Tizen Studio и запускается вместе с телевизором; в TorrStream — «Использовать TorrServer, установленный на этом устройстве». Архивы TorrServer-linux-*.tar.gz — та же служба для Linux, .NET ставить не нужно: tar xzf, затем ./torrserver.sh install (служба systemd, спросит порт) или ./TorrServer 8090. Одной командой: mkdir -p ~/torrserver && cd ~/torrserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/torrserver.sh -o torrserver.sh && bash torrserver.sh install. Обновить поставленную службу: curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/torrserver.sh -o /tmp/torrserver.sh && bash /tmp/torrserver.sh update. TorrServer-windows-*.zip — для Windows: распакуйте и запустите torrserver.cmd (спросит порт; torrserver.cmd install — автозапуск при входе). Подробнее — в README."
+          gh release create "$GITHUB_REF_NAME" dist/MonoServer-Tizen.wgt dist/MonoServer-linux-x64.tar.gz dist/MonoServer-linux-arm64.tar.gz dist/MonoServer-windows-x64.zip dist/MonoServer-windows-arm64.zip $PRE \
+            --title "MonoServer ${GITHUB_REF_NAME#v}" \
+            --notes "MonoServer — TorrServer на C# (MonoTorrent) с API TorrServer MatriX на порту 8090: Samsung Tizen (и 5.5, где официальный TorrServer не запускается), Linux, Windows. Tizen: MonoServer-Tizen.wgt через Apps2Samsung (Custom WGT) или Tizen Studio, ставится поверх прежнего TorrServer-Tizen.wgt; в TorrStream — «Использовать TorrServer, установленный на этом устройстве». Linux (x64, arm64) — служба systemd одной командой: mkdir -p ~/monoserver && cd ~/monoserver && curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o monoserver.sh && bash monoserver.sh install; обновить (и перенести службу torrserver-tizen): curl -fsSL https://raw.githubusercontent.com/cash94/TorrServer-Tizen/main/linux/monoserver.sh -o /tmp/monoserver.sh && bash /tmp/monoserver.sh update. Windows (x64, arm64): распакуйте MonoServer-windows-*.zip и запустите monoserver.cmd (monoserver.cmd install — автозапуск при входе). Подробнее — в README."
 
       - name: Артефакт
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
-          name: TorrServer-Tizen
+          name: MonoServer
           path: dist/*
           retention-days: 7

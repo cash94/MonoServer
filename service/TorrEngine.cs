@@ -103,9 +103,9 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.17";
+        public const string ServiceVersion = "1.0.18";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
-        public const string EchoVersion = "MatriX.136 (TorrStream " + ServiceVersion + ", MonoTorrent)";
+        public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 
         // Ретрекеры, как у TorrServer: magnet с одними хэшами иначе ищет пиров
         // только по DHT, а на холодном телевизоре это долго
@@ -124,7 +124,7 @@ namespace TorrStreamTorrServer
         readonly Action<string> log;
         readonly object sync = new object();
         readonly Dictionary<string, TorrEntry> entries = new Dictionary<string, TorrEntry>();
-        readonly HttpClient http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        readonly HttpClient http = Http.Client(TimeSpan.FromSeconds(30));
         readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
         ClientEngine engine;
         MemoryStorage storage;
@@ -272,6 +272,10 @@ namespace TorrStreamTorrServer
                 .WithDhtCreator(dhtBoot.Create)
                 .WithPeerConnectionCreator("ipv4", uri => new MonoTorrent.Connections.Peer.SocketPeerConnection(uri, new PeerConnector()))
                 .WithPeerConnectionCreator("ipv6", uri => new MonoTorrent.Connections.Peer.SocketPeerConnection(uri, new PeerConnector()));
+            // HTTP-трекеры и веб-сиды — через свой обработчик службы, если он есть (Http.cs):
+            // на Android штатный HttpClient не умеет HTTPS
+            if (Http.HandlerFactory != null)
+                factories = factories.WithHttpClientCreator(family => Http.Client(TimeSpan.FromSeconds(30), family));
             return new ClientEngine(b.ToSettings(), factories);
         }
 
@@ -1518,7 +1522,7 @@ namespace TorrStreamTorrServer
                 active = entries.Values.Count(e => e.Manager != null);
                 foreach (var e in entries.Values) if (e.Store != null) filled += e.Store.Filled;
             }
-            w.Obj().Prop("name", "TorrStream TorrServer").Prop("service", ServiceVersion).Prop("echo", EchoVersion)
+            w.Obj().Prop("name", "MonoServer").Prop("service", ServiceVersion).Prop("echo", EchoVersion)
                 .Prop("engine", "MonoTorrent " + EngineVersion())
                 .Prop("runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription)
                 .Prop("arch", System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString())

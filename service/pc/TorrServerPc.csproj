@@ -7,7 +7,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
-    <AssemblyName>TorrServerPc</AssemblyName>
+    <AssemblyName>MonoServer</AssemblyName>
     <Nullable>disable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>

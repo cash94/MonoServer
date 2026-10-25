@@ -1,6 +1,6 @@
 <!--
   TorrServer на C# для Samsung Tizen 5.5 (MonoTorrent) — .NET-часть пакета
-  TorrServer-Tizen.wgt. Сборка: python tools/build.py
+  MonoServer-Tizen.wgt. Сборка: python tools/build.py
   (гибрид, как служба ffprobe). Проверка на ПК — pc/ (net8.0, те же исходники).
 -->
 <Project Sdk="Tizen.NET.Sdk/1.1.6">
@@ -34,6 +34,9 @@
   <ItemGroup>
     <Compile Remove="pc\**" />
     <None Remove="pc\**" />
+    <!-- mono/ — служба для Android (Mono из Termux), в пакет для Tizen не идёт -->
+    <Compile Remove="mono\**" />
+    <None Remove="mono\**" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,0 +1,85 @@
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+}
+
+// Версия приложения — версия службы (TorrEngine.ServiceVersion): 1.0.18 → код 10018
+def serviceVersion = (file('../../service/TorrEngine.cs').text =~ /ServiceVersion = "([0-9.]+)"/)[0][1]
+def (vMajor, vMinor, vPatch) = serviceVersion.tokenize('.').collect { it as int }
+
+android {
+    compileSdk 34
+    namespace 'online.torrstream.monoserver'
+
+    defaultConfig {
+        applicationId "online.torrstream.monoserver"
+        // 24: Mono и библиотеки из Termux собраны под API 24
+        minSdkVersion 24
+        // 28, не выше: mono — исполняемый файл, и служба распаковывается в память
+        // приложения. Запускать такое приложению с targetSdk 29+ Android 10 запрещает (W^X)
+        //noinspection ExpiredTargetSdkVersion
+        targetSdkVersion 28
+        versionCode vMajor * 10000 + vMinor * 100 + vPatch
+        versionName serviceVersion
+    }
+
+    // Подпись release-сборки — ключом из секретов CI (.github/workflows/build.yml):
+    // файл ключа и пароли приходят переменными окружения. Без них release-APK
+    // собирается неподписанным, а для проверки на устройстве есть debug
+    def ksFile = System.getenv('KEYSTORE_FILE')
+    signingConfigs {
+        release {
+            if (ksFile) {
+                storeFile file(ksFile)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                keyPassword System.getenv('KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (ksFile) signingConfig signingConfigs.release
+        }
+    }
+
+    // targetSdk 28 lint считает ошибкой и рубит release — а он нужен намеренно
+    lint {
+        checkReleaseBuilds false
+    }
+
+    // Отдельный APK на архитектуру: в каждом свои Mono и библиотеки
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            universalApk false
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            // Программы лежат в jniLibs как lib*.so: система распаковывает их в
+            // nativeLibraryDir, откуда разрешён запуск. Без legacy-упаковки они
+            // остались бы внутри APK, и запускать было бы нечего
+            useLegacyPackaging true
+            keepDebugSymbols += ['**/*.so']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}

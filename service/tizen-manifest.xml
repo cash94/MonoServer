@@ -4,14 +4,14 @@
   TorrServer не запускается). Стартует вместе с телевизором (on-boot,
   launch_on_event), её же будит страница пакета (tizen.application.launch), и
   живёт в фоне: API TorrServer на :8090 всех адресов телевизора.
-  Собирается гибридом в TorrServer-Tizen.wgt (tools/build.py): package при сборке заменяется на package веб-приложения.
+  Собирается гибридом в MonoServer-Tizen.wgt (tools/build.py): package при сборке заменяется на package веб-приложения.
   Метаданные — как у службы ffprobe (проверены на Tizen 5.5 и 9). Программы
   служба не запускает, поэтому exec.bin, fork и process.* не нужны.
 -->
-<manifest xmlns="http://tizen.org/ns/packages" api-version="4.0" package="online.torrstream.torrserver" version="1.0.17">
+<manifest xmlns="http://tizen.org/ns/packages" api-version="4.0" package="online.torrstream.torrserver" version="1.0.18">
     <profile name="tv" />
     <service-application appid="online.torrstream.torrserver" exec="TorrStreamTorrServer.dll" multiple="false" nodisplay="false" taskmanage="false" on-boot="true" type="dotnet" launch_mode="caller">
-        <label>TorrStream TorrServer</label>
+        <label>MonoServer</label>
         <icon>icon.png</icon>
         <metadata key="http://samsung.com/tv/metadata/background.execution.support" value="true"/>
         <metadata key="http://developer.samsung.com/tizen/metadata/allow-on-boot"/>

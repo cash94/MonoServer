@@ -1,0 +1,17 @@
+// Версии — как у TorrStream-AndroidServer: сборка JDK 11+ и Gradle 7.5
+buildscript {
+    ext.kp_version = '1.8.22'
+    ext.gp_version = '7.4.2'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:$gp_version"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kp_version"
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.buildDir
+}

@@ -1,9 +1,9 @@
 """
-Сборка TorrServer для Samsung Tizen и Linux.
+Сборка MonoServer (TorrServer на C#) для Samsung Tizen, Linux и Windows.
 
   python tools/build.py [--version 1.0.9] [--out dist] [--linux] [--windows]
 
-TorrServer-Tizen.wgt — гибрид, как TorrServer от no-cover/torr-streaming и
+MonoServer-Tizen.wgt — гибрид, как TorrServer от no-cover/torr-streaming и
 службы TorrStream-Tizen: страница app/ (запуск службы и её состояние) и
 .NET-служба service/ (TorrServer на C#, MonoTorrent, API TorrServer MatriX на
 8090). Раскладка пакета:
@@ -13,7 +13,7 @@ TorrServer-Tizen.wgt — гибрид, как TorrServer от no-cover/torr-stre
 Подписей внутри нет: пакет подписывает тот, кто ставит (Apps2Samsung, Tizen
 Studio) своим сертификатом Samsung — он привязан к DUID телевизора.
 
---linux — ещё TorrServer-linux-x64.tar.gz и TorrServer-linux-arm64.tar.gz:
+--linux — ещё MonoServer-linux-x64.tar.gz и MonoServer-linux-arm64.tar.gz:
 та же служба консольной программой (service/pc), с .NET внутри.
 
 Результат — <имя>_<версия> и копия с постоянным именем. Нужен .NET SDK 8+
@@ -25,7 +25,7 @@ import xml.etree.ElementTree as ET
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE = os.path.join(ROOT, 'service')
 APP = os.path.join(ROOT, 'app')
-BASE = 'TorrServer-Tizen'
+BASE = 'MonoServer-Tizen'
 
 
 def check_xml(text, what):
@@ -44,8 +44,8 @@ def set_version(text, tag, version):
 def build_tpk(version, work):
     """Собрать .tpk службы во временном каталоге; путь к нему"""
     proj = os.path.join(work, 'service')
-    # pc/ — запуск на ПК и Linux, в пакет не идёт
-    shutil.copytree(SERVICE, proj, ignore=shutil.ignore_patterns('bin', 'obj', 'pc'))
+    # pc/ — запуск на ПК и Linux, mono/ — для Android: в пакет не идут
+    shutil.copytree(SERVICE, proj, ignore=shutil.ignore_patterns('bin', 'obj', 'pc', 'mono'))
     if version:
         man_path = os.path.join(proj, 'tizen-manifest.xml')
         man = open(man_path, encoding='utf-8').read()
@@ -115,16 +115,16 @@ def build_linux(version, out, work):
                                '--self-contained', 'true', '-p:PublishSingleFile=true',
                                '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=None',
                                '-nologo', '-v', 'q', '-o', pub])
-        name = 'TorrServer-' + rid
+        name = 'MonoServer-' + rid
         target = os.path.join(out, '%s_%s.tar.gz' % (name, version))
         with tarfile.open(target, 'w:gz') as tar:
-            info = tar.gettarinfo(os.path.join(pub, 'TorrServerPc'), arcname='TorrServer')
+            info = tar.gettarinfo(os.path.join(pub, 'MonoServer'), arcname='MonoServer')
             info.mode = 0o755
-            with open(os.path.join(pub, 'TorrServerPc'), 'rb') as f:
+            with open(os.path.join(pub, 'MonoServer'), 'rb') as f:
                 tar.addfile(info, f)
             # Скрипт запуска и службы systemd — рядом с программой
-            script = os.path.join(ROOT, 'linux', 'torrserver.sh')
-            si = tar.gettarinfo(script, arcname='torrserver.sh')
+            script = os.path.join(ROOT, 'linux', 'monoserver.sh')
+            si = tar.gettarinfo(script, arcname='monoserver.sh')
             si.mode = 0o755
             with open(script, 'rb') as f:
                 tar.addfile(si, f)
@@ -138,18 +138,18 @@ def build_linux(version, out, work):
 
 
 def build_windows(version, out, work):
-    """Windows (x64, arm64): TorrServer.exe с .NET внутри и torrserver.cmd — zip"""
+    """Windows (x64, arm64): MonoServer.exe с .NET внутри и monoserver.cmd — zip"""
     for rid, name in (('win-x64', 'windows-x64'), ('win-arm64', 'windows-arm64')):
         pub = os.path.join(work, rid)
         subprocess.check_call(['dotnet', 'publish', os.path.join(SERVICE, 'pc'), '-c', 'Release', '-r', rid,
                                '--self-contained', 'true', '-p:PublishSingleFile=true',
                                '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=None',
                                '-nologo', '-v', 'q', '-o', pub])
-        base = 'TorrServer-' + name
+        base = 'MonoServer-' + name
         target = os.path.join(out, '%s_%s.zip' % (base, version))
         with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.write(os.path.join(pub, 'TorrServerPc.exe'), 'TorrServer.exe')
-            z.write(os.path.join(ROOT, 'windows', 'torrserver.cmd'), 'torrserver.cmd')
+            z.write(os.path.join(pub, 'MonoServer.exe'), 'MonoServer.exe')
+            z.write(os.path.join(ROOT, 'windows', 'monoserver.cmd'), 'monoserver.cmd')
             z.write(os.path.join(SERVICE, 'res', 'THIRD-PARTY-NOTICES.txt'), 'THIRD-PARTY-NOTICES.txt')
         shutil.copyfile(target, os.path.join(out, base + '.zip'))
         print('==', target)

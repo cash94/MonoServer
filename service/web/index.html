@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#171a21">
-<title>TorrServer Tizen</title>
+<title>MonoServer</title>
 <!--
   Страница отладки службы (GET /, WebPage.cs). Только API TorrServer и служебное:
   POST /torrents, /cache (с "peers":true), /settings; GET /version, /log?after=N.
@@ -159,7 +159,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
 <body>
 <header>
   <div class="top">
-    <h1>TorrServer · Tizen</h1>
+    <h1>MonoServer</h1>
     <span id="ver-short">загрузка…</span>
     <button id="ver-toggle" type="button" title="Подробности о службе">ⓘ</button>
     <div class="chips" id="ver"><span class="chip">загрузка…</span></div>
@@ -812,7 +812,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
     var blob = new Blob([logLines.join('\n')], { type: 'text/plain;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'torrserver-tizen-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.log';
+    a.download = 'monoserver-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.log';
     document.body.appendChild(a); a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.parentNode.removeChild(a); }, 1000);
   };

@@ -300,12 +300,12 @@ namespace TorrStreamTorrServer
         static readonly PropertyInfo PeerConnectionProp =
             typeof(PeerId).GetProperty("Connection", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        /// <summary>Транспорт пира — «uTP» или «TCP» (соединение у PeerId закрытое — через отражение)</summary>
-        static string PeerTransport(PeerId p)
+        /// <summary>uTP-соединение пира или null — TCP (соединение у PeerId закрытое — через отражение)</summary>
+        static UtpPeerConnection PeerUtp(PeerId p)
         {
             object c = null;
             try { c = PeerConnectionProp?.GetValue(p); } catch { }
-            return c is UtpPeerConnection || (c is HybridPeerConnection h && h.IsUtp) ? "uTP" : "TCP";
+            return c as UtpPeerConnection ?? (c as HybridPeerConnection)?.Utp;
         }
 
         TorrentSettings TorrentSettingsFor()
@@ -1517,9 +1517,17 @@ namespace TorrStreamTorrServer
                                 .Prop("Requests", p.AmRequestingPiecesCount)
                                 .Prop("Choking", p.IsChoking).Prop("Interested", p.AmInterested)
                                 .Prop("Encryption", p.EncryptionType.ToString())
-                                .Prop("Transport", PeerTransport(p))
-                                .Prop("Incoming", p.ConnectionDirection == Direction.Incoming)
-                                .EndObj();
+                                .Prop("Transport", PeerUtp(p) != null ? "uTP" : "TCP")
+                                .Prop("Incoming", p.ConnectionDirection == Direction.Incoming);
+                            var utpConn = PeerUtp(p);
+                            if (utpConn != null)
+                            {
+                                var u = utpConn.DiagnosticSnapshot;
+                                w.Key("Utp").Obj().Prop("Rtt", u.RttMicroseconds / 1000).Prop("Delay", u.RecentDelayMicroseconds / 1000)
+                                    .Prop("RecvWindow", u.ReceiveWindowBytes).Prop("SendWindow", u.SendWindowBytes).Prop("PeerWindow", u.PeerWindowBytes)
+                                    .Prop("InFlight", u.BytesInFlight).Prop("Mtu", u.CurrentMtuBytes).Prop("State", u.State).EndObj();
+                            }
+                            w.EndObj();
                         }
                 }
                 catch { }

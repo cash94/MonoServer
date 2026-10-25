@@ -337,8 +337,14 @@ namespace TorrStreamTorrServer
                 if (!block.Received && block.RequestedOff == peer) {
                     block.CancelRequest ();
                     piece.Abandoned = true;
-                    cancellations[0] = new PieceSegment (piece.Index, block.BlockIndex);
-                    cancellations = cancellations.Slice (1);
+                    // Запросов за пиром бывает больше, чем думает MonoTorrent
+                    // (AmRequestingPiecesCount — по нему выделен буфер): тогда
+                    // IndexOutOfRange обрывал CleanupSocket, пир оставался в
+                    // ConnectedPeers и навсегда занимал место. Лишние — отменяем молча
+                    if (cancellations.Length > 0) {
+                        cancellations[0] = new PieceSegment (piece.Index, block.BlockIndex);
+                        cancellations = cancellations.Slice (1);
+                    }
                 }
             }
         }

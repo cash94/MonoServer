@@ -197,7 +197,9 @@ Termux (`service/mono/OpenSslHttpHandler.cs`, `Http.cs`), с корневыми
   поэтому работает во всех сборках (Tizen, Android, Linux, Windows). UDP-сокет
   порта пиров общий для DHT и uTP (`SharedUdpSocket.cs`, пакеты делятся по
   первому байту). Входящие — TCP и uTP; исходящие (`HybridPeerConnection`) —
-  сначала uTP, через 0,7 с без ответа параллельно TCP, что подключится первым.
+  TCP и uTP сразу, но TCP главнее: uTP остаётся, только если TCP не подключился
+  (в 1.0.20 первым был uTP — и скорость упала: по uTP отдающий пир сам
+  уступает канал и проседает на потерях; раздача Ubuntu — 11–18 МБ/с против 23).
   При закрытии соединения пиру уходит ST_RESET (в master его нет, и libtorrent
   отбрасывал новое подключение как «duplicate peer-id»). Настройка `EnableUTP`
   (у клиентов TorrServer — `DisableUTP`) действует сразу, без перезапуска; в

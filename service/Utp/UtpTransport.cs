@@ -3,10 +3,15 @@
 //    UDP-сокете (SharedUdpSocket) того же порта;
 //  - исходящие: HybridPeerConnection вместо SocketPeerConnection. 3.0.2 на
 //    попытку подключения создаёт одно соединение, поэтому выбор транспорта —
-//    внутри него: сначала uTP (как у libtorrent), и если пир за UtpHeadStartMs
-//    не ответил, параллельно TCP; что подключится первым, то и остаётся.
-//    Пиры, у которых uTP не ответил, а TCP подключился, запоминаются — к ним
-//    дальше сразу по TCP, без задержки.
+//    внутри него: TCP и uTP пробуются сразу оба, и TCP главнее — uTP остаётся,
+//    только если TCP за TcpGraceMs после uTP не подключился (или не смог).
+//    В 1.0.20 было наоборот — сначала uTP, как у libtorrent, — и стало хуже:
+//    по uTP отдающий пир сам сбавляет скорость (LEDBAT уступает другому
+//    трафику) и сильно проседает на потерях, так что быстрые TCP-соединения
+//    заменились медленными (раздача Ubuntu: 20 uTP-пиров из 31 давали вместе
+//    1,5 МБ/с, всё вместе — 11–18 МБ/с против 23 у 1.0.19; libtorrent с
+//    libtorrent по uTP при 2 % потерь — 0,2 МБ/с). Теперь uTP только добавляет
+//    пиров, до которых по TCP не достучаться.
 // Настройка EnableUTP выключает оба направления сразу, без перезапуска.
 using System;
 using System.Collections.Concurrent;
@@ -24,24 +29,17 @@ namespace TorrStreamTorrServer.Utp
 {
     public sealed class HybridPeerConnection : IPeerConnection
     {
-        /// <summary>Сколько ждать ответа по uTP, прежде чем пробовать и TCP</summary>
-        public const int UtpHeadStartMs = 700;
+        /// <summary>uTP уже подключился — сколько ещё ждать TCP, прежде чем оставить uTP</summary>
+        public const int TcpGraceMs = 1000;
         /// <summary>
         /// Предел попытки uTP: MonoTorrent закрывает незавершённые подключения
         /// старше EngineSettings.ConnectionTimeout (у нас 6 с), а повтор SYN у uTP — через 3 с
         /// </summary>
         public const int UtpConnectTimeoutMs = 5000;
-        const int MaxRemembered = 4096;
-
-        // Пиры, к которым uTP не подключился, а TCP — да (адрес:порт → когда)
-        static readonly ConcurrentDictionary<string, long> TcpOnly = new ConcurrentDictionary<string, long>();
-        const long ForgetTcpOnlyMs = 30 * 60 * 1000;
-        static readonly Stopwatch Clock = Stopwatch.StartNew();
 
         readonly UtpPeerConnectionListener utp;
         readonly Func<IPeerConnection> createTcp;
         readonly IPEndPoint endPoint;
-        readonly string key;
         IPeerConnection active;
         UtpPeerConnection utpConnection;
         IPeerConnection tcpConnection;
@@ -54,7 +52,6 @@ namespace TorrStreamTorrServer.Utp
             this.createTcp = createTcp;
             endPoint = new IPEndPoint(IPAddress.Parse(uri.Host), uri.Port);
             AddressBytes = endPoint.Address.GetAddressBytes();
-            key = endPoint.ToString();
         }
 
         public ReadOnlyMemory<byte> AddressBytes { get; }
@@ -64,20 +61,10 @@ namespace TorrStreamTorrServer.Utp
         public bool IsIncoming => false;
         public Uri Uri { get; }
 
-        /// <summary>Подключились по uTP (до подключения — false)</summary>
-        public bool IsUtp => active is UtpPeerConnection;
+        /// <summary>uTP-соединение, если подключились по uTP</summary>
+        public UtpPeerConnection Utp => active as UtpPeerConnection;
 
-        bool UtpUsable
-        {
-            get
-            {
-                if (utp == null || !utp.Enabled || utp.Status != ListenerStatus.Listening)
-                    return false;
-                if (TcpOnly.TryGetValue(key, out var since) && Clock.ElapsedMilliseconds - since < ForgetTcpOnlyMs)
-                    return false;
-                return true;
-            }
-        }
+        bool UtpUsable => utp != null && utp.Enabled && utp.Status == ListenerStatus.Listening;
 
         public async ReusableTask ConnectAsync()
         {
@@ -90,44 +77,41 @@ namespace TorrStreamTorrServer.Utp
                 return;
             }
 
+            var tcpConn = tcpConnection = createTcp();
             var u = utpConnection = new UtpPeerConnection(utp, endPoint, (ushort)UtpRandom.Next(1, ushort.MaxValue));
-            if (Disposed) { u.Dispose(); throw new ObjectDisposedException(nameof(HybridPeerConnection)); }
-            var utpTask = ConnectUtp(u);
-            if (await Task.WhenAny(utpTask, Task.Delay(UtpHeadStartMs)).ConfigureAwait(false) == utpTask && utpTask.Result)
-            {
-                Won(u, true);
-                return;
-            }
-
-            Task<bool> tcpTask;
             if (Disposed)
-                tcpTask = Task.FromResult(false);
-            else
             {
-                var tcp = tcpConnection = createTcp();
-                tcpTask = ConnectTcp(tcp);
+                tcpConn.Dispose();
+                u.Dispose();
+                throw new ObjectDisposedException(nameof(HybridPeerConnection));
             }
-
+            var tcpTask = ConnectTcp(tcpConn);
+            var utpTask = ConnectUtp(u);
+            Task grace = null;
             while (true)
             {
-                if (utpTask.IsCompleted && utpTask.Result)
-                {
-                    Won(u, true);
-                    return;
-                }
                 if (tcpTask.IsCompleted && tcpTask.Result)
                 {
-                    // uTP не ответил и за время подключения по TCP — пир его, видимо,
-                    // не умеет: дальше к нему сразу по TCP
-                    Remember();
-                    Won(tcpConnection, false);
+                    Won(tcpConn, false);
                     return;
                 }
-                if (utpTask.IsCompleted && tcpTask.IsCompleted)
+                if (utpTask.IsCompleted && utpTask.Result)
+                {
+                    // TCP не смог или не успел за TcpGraceMs — остаётся uTP
+                    if (tcpTask.IsCompleted || grace != null && grace.IsCompleted)
+                    {
+                        Won(u, true);
+                        return;
+                    }
+                    if (grace == null)
+                        grace = Task.Delay(TcpGraceMs);
+                }
+                if (utpTask.IsCompleted && !utpTask.Result && tcpTask.IsCompleted)
                     throw new SocketException((int)SocketError.TimedOut);
-                var pending = new List<Task>(2);
-                if (!utpTask.IsCompleted) pending.Add(utpTask);
+                var pending = new List<Task>(3);
                 if (!tcpTask.IsCompleted) pending.Add(tcpTask);
+                if (!utpTask.IsCompleted) pending.Add(utpTask);
+                if (grace != null) pending.Add(grace);
                 await Task.WhenAny(pending).ConfigureAwait(false);
             }
         }
@@ -162,18 +146,10 @@ namespace TorrStreamTorrServer.Utp
             }
         }
 
-        void Remember()
-        {
-            if (TcpOnly.Count >= MaxRemembered)
-                TcpOnly.Clear();
-            TcpOnly[key] = Clock.ElapsedMilliseconds;
-        }
-
         void Won(IPeerConnection winner, bool isUtp)
         {
             if (isUtp)
             {
-                TcpOnly.TryRemove(key, out _);
                 try { tcpConnection?.Dispose(); } catch { }
             }
             else

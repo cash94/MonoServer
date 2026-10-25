@@ -8,7 +8,7 @@
   Метаданные — как у службы ffprobe (проверены на Tizen 5.5 и 9). Программы
   служба не запускает, поэтому exec.bin, fork и process.* не нужны.
 -->
-<manifest xmlns="http://tizen.org/ns/packages" api-version="4.0" package="online.torrstream.torrserver" version="1.0.19">
+<manifest xmlns="http://tizen.org/ns/packages" api-version="4.0" package="online.torrstream.torrserver" version="1.0.20">
     <profile name="tv" />
     <service-application appid="online.torrstream.torrserver" exec="TorrStreamTorrServer.dll" multiple="false" nodisplay="false" taskmanage="false" on-boot="true" type="dotnet" launch_mode="caller">
         <label>MonoServer</label>

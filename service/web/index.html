@@ -2,7 +2,8 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#171a21">
 <title>TorrServer Tizen</title>
 <!--
   Страница отладки службы (GET /, WebPage.cs). Только API TorrServer и служебное:
@@ -30,6 +31,36 @@ h1 { font-size: 16px; margin: 0; font-weight: 600; }
 nav { display: flex; gap: 4px; margin-top: 8px; overflow-x: auto; }
 nav button { background: none; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 6px; font: inherit; cursor: pointer; white-space: nowrap; }
 nav button.on { background: var(--panel2); color: var(--text); }
+nav .ico, nav .l-short { display: none; }
+#ver-short { display: none; color: var(--muted); font-size: 12px; }
+#ver-toggle { display: none; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 999px; width: 28px; height: 28px; font: inherit; cursor: pointer; margin-left: auto; }
+/* Карточки торрентов */
+.tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.tcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; grid-template-columns: 78px 1fr; gap: 12px; align-items: start; min-width: 0; }
+.tcard.active { border-color: #2c4a35; }
+.tposter { width: 78px; height: 112px; border-radius: 8px; background: linear-gradient(135deg, #24304a, #1b2230); overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #9fb3d9; font-size: 30px; font-weight: 600; }
+.tposter img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tbody { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ttitle { font-weight: 600; line-height: 1.3; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.tmeta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--panel2); color: var(--muted); }
+.pill.ok { background: #183524; color: #6fdd8b; }
+.pill.warn { background: #3a2e12; color: #e3b341; }
+.pill.info { background: #172c45; color: #7fb8ff; }
+.tstats { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tstats .muted { font-size: 12px; }
+.bar.thin { height: 6px; }
+.tactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.tfiles { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 8px; }
+.flist { list-style: none; margin: 6px 0 0; padding: 0; }
+.flist li { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.flist li:last-child { border-bottom: 0; }
+.flist .fid { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.flist .fname { word-break: break-word; min-width: 0; }
+.flist .fname small { display: block; color: var(--muted); }
+.flist .facts { display: flex; gap: 6px; }
+.between { justify-content: space-between; }
+a.btn { display: inline-block; text-decoration: none; color: var(--text); }
 main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 section { display: none; }
 section.on { display: block; }
@@ -42,7 +73,9 @@ input:focus, select:focus, button:focus { outline: 2px solid var(--accent); outl
 button.btn { cursor: pointer; }
 button.btn:hover { border-color: var(--accent); }
 button.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
-button.btn.small { padding: 2px 8px; font-size: 12px; }
+button.btn.small, a.btn.small { padding: 3px 10px; font-size: 13px; }
+a.btn { font: inherit; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+a.btn:hover { border-color: var(--accent); text-decoration: none; }
 .muted { color: var(--muted); }
 .mono { font-family: var(--mono); font-size: 12px; }
 .err-text { color: var(--bad); }
@@ -81,11 +114,45 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
 .set-grid label span { overflow: hidden; text-overflow: ellipsis; }
 .set-grid input[type=number], .set-grid input[type=text] { width: 120px; }
 .empty { color: var(--muted); padding: 16px 0; text-align: center; }
-@media (max-width: 640px) {
-  header { position: static; }
-  main { padding: 12px; }
+/* Телефон в вертикальном положении: вкладки внизу под большой палец, шапка
+   в одну строку (подробности — по ⓘ), крупные кнопки и поля 16 px (iOS не
+   увеличивает страницу при вводе) */
+@media (max-width: 700px) {
+  header { position: sticky; padding: 8px 12px; }
+  h1 { font-size: 15px; }
+  .top { flex-wrap: nowrap; gap: 8px; }
+  #ver-short { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ver-toggle { display: block; flex: none; }
+  #ver { display: none; margin-top: 8px; }
+  header.open .top { flex-wrap: wrap; }
+  header.open #ver { display: flex; width: 100%; order: 5; }
+  nav { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; z-index: 8; background: var(--panel); border-top: 1px solid var(--line);
+        justify-content: space-around; gap: 0; padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); overflow: visible; }
+  nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 2px; font-size: 11px; border-radius: 10px; }
+  nav button.on { background: var(--panel2); color: var(--accent); }
+  nav .ico { display: block; font-size: 19px; line-height: 1.1; }
+  nav .l-long { display: none; }
+  nav .l-short { display: inline; }
+  main { padding: 10px 10px calc(78px + env(safe-area-inset-bottom)); }
+  .card { padding: 10px 12px; border-radius: 12px; }
   .hide-sm { display: none; }
-  #log { height: calc(100vh - 260px); }
+  input, select, button.btn, a.btn { font-size: 16px; min-height: 40px; }
+  button.btn.small, a.btn.small { font-size: 14px; min-height: 36px; padding: 4px 12px; }
+  input[type=checkbox] { min-height: 0; width: 20px; height: 20px; vertical-align: -4px; }
+  .row > .grow { flex-basis: 100%; }
+  .tgrid { grid-template-columns: 1fr; gap: 10px; }
+  .tcard { grid-template-columns: 64px 1fr; gap: 10px; padding: 10px; }
+  .tposter { width: 64px; height: 92px; font-size: 24px; }
+  .tactions .btn { flex: 1 1 auto; text-align: center; }
+  .flist li { grid-template-columns: 22px 1fr; }
+  .flist .facts { grid-column: 2; }
+  .flist .facts .btn { flex: 1; text-align: center; }
+  .stats { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .stat .v { font-size: 14px; }
+  .set-grid { grid-template-columns: 1fr; }
+  .set-grid input[type=number], .set-grid input[type=text] { width: 110px; }
+  #log { height: calc(100vh - 250px); min-height: 240px; font-size: 11px; }
+  #tip { display: none !important; }
 }
 </style>
 </head>
@@ -93,13 +160,15 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
 <header>
   <div class="top">
     <h1>TorrServer · Tizen</h1>
+    <span id="ver-short">загрузка…</span>
+    <button id="ver-toggle" type="button" title="Подробности о службе">ⓘ</button>
     <div class="chips" id="ver"><span class="chip">загрузка…</span></div>
   </div>
   <nav id="nav">
-    <button data-tab="torrents" class="on">Торренты</button>
-    <button data-tab="cache">Кэш и читатели</button>
-    <button data-tab="log">Журнал</button>
-    <button data-tab="settings">Настройки</button>
+    <button data-tab="torrents" class="on"><span class="ico">▦</span><span class="l-long">Торренты</span><span class="l-short">Торренты</span></button>
+    <button data-tab="cache"><span class="ico">◔</span><span class="l-long">Кэш и читатели</span><span class="l-short">Кэш</span></button>
+    <button data-tab="log"><span class="ico">☰</span><span class="l-long">Журнал</span><span class="l-short">Журнал</span></button>
+    <button data-tab="settings"><span class="ico">⚙</span><span class="l-long">Настройки</span><span class="l-short">Настройки</span></button>
   </nav>
 </header>
 
@@ -114,16 +183,11 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       </form>
       <div id="add-msg" class="muted" style="margin-top:6px"></div>
     </div>
-    <div class="card">
-      <div class="row" style="justify-content:space-between">
-        <h2>Торренты</h2>
-        <span class="muted" id="list-time"></span>
-      </div>
-      <div class="scroll-x"><table id="list">
-        <thead><tr><th>Название</th><th>Состояние</th><th class="num">Размер</th><th class="num">Скорость</th><th class="num hide-sm">Пиры</th><th class="num hide-sm">В памяти</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table></div>
+    <div class="row between" style="margin:2px 2px 10px">
+      <input id="list-filter" class="grow" placeholder="Поиск по названию" autocomplete="off" type="search">
+      <span class="muted hide-sm" id="list-time"></span>
     </div>
+    <div class="tgrid" id="tlist"><div class="empty">Загрузка…</div></div>
   </section>
 
   <!-- ==================== Кэш ==================== -->
@@ -249,22 +313,30 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       if (!v.evict) html += '<span class="chip err" title="Вытесненные куски не скачаются заново при перемотке назад">evict недоступен</span>';
       if (v.error) html += '<span class="chip err">' + esc(v.error) + '</span>';
       box.innerHTML = html;
+      if (v.cache_mb) cacheMb = v.cache_mb;
+      $('ver-short').textContent = v.service + ' · ' + (v.active || 0) + ' откр. · DHT ' + String(v.dht || '—').split(',')[0] + ' · ' + duration(v.uptime_s);
     });
   }
+  $('ver-toggle').onclick = function () {
+    var h = document.getElementsByTagName('header')[0];
+    h.className = h.className === 'open' ? '' : 'open';
+  };
 
   // ==================== торренты ====================
   var torrents = [];
-  var openFiles = {};   // hash → показан список файлов
+  var openFiles = {};   // hash → раскрыт список файлов
+  var cacheMb = 64;     // кэш на торрент (из /version) — для полоски в карточке
+  var listFilter = '';
 
-  function statusOf(t) {
-    if (t.stat_string) return t.stat_string;
-    return ['Добавлен', 'Получение инфо', 'Предзагрузка', 'Работает', 'Закрыт', 'В базе'][t.stat] || String(t.stat);
-  }
+  var STAT_NAMES = ['Добавлен', 'Получение метаданных', 'Предзагрузка', 'Работает', 'Закрыт', 'В базе'];
+  var STAT_CLASS = ['info', 'info', 'warn', 'ok', '', ''];
+  function statusOf(t) { return STAT_NAMES[t.stat] || t.stat_string || String(t.stat); }
   function filesOf(t) {
     if (t.file_stats && t.file_stats.length) return t.file_stats;
     try { var d = JSON.parse(t.data || ''); if (d && d.TorrServer && d.TorrServer.Files) return d.TorrServer.Files; } catch (e) { }
     return [];
   }
+  function isActive(t) { return t.download_speed !== undefined; }
 
   function loadTorrents() {
     post('/torrents', { action: 'list' }, function (err, list) {
@@ -276,75 +348,120 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
     });
   }
 
-  // Строки обновляются по ячейкам: замена всей таблицы раз в секунду съедала
-  // клики (кнопка исчезала между нажатием и отпусканием)
-  var torrentsLayout = '';
-  function torrentCells(t) {
-    var active = t.download_speed !== undefined;
-    return [
-      '<a href="#" data-act="files">' + esc(t.title || t.name || t.hash) + '</a><div class="mono muted">' + esc(t.hash) + '</div>',
-      esc(statusOf(t)),
-      t.torrent_size ? bytes(t.torrent_size) : '—',
-      active ? '↓ ' + speed(t.download_speed) + '<br><span class="muted">↑ ' + speed(t.upload_speed) + '</span>' : '—',
-      active ? t.active_peers + ' / ' + t.total_peers + '<br><span class="muted">сидов ' + t.connected_seeders + '</span>' : '—',
-      active ? bytes(t.loaded_size) : '—',
-      (active ? '<button class="btn small" data-act="cache">Кэш</button> <button class="btn small" data-act="drop" title="Закрыть торрент, кэш освободится">Закрыть</button> ' : '') +
-        '<button class="btn small danger" data-act="rem">Удалить</button>'
-    ];
+  function visibleTorrents() {
+    if (!listFilter) return torrents;
+    var q = listFilter.toLowerCase(), out = [];
+    for (var i = 0; i < torrents.length; i++) {
+      var t = torrents[i];
+      if (((t.title || '') + ' ' + (t.name || '') + ' ' + t.hash).toLowerCase().indexOf(q) >= 0) out.push(t);
+    }
+    return out;
   }
-  var CELL_CLASS = ['title-cell', '', 'num', 'num', 'num hide-sm', 'num hide-sm', 'num'];
 
+  // Части карточки, которые меняются раз в секунду. Карточка целиком
+  // пересобирается только при смене состава (торренты, раскрытые файлы):
+  // замена всего списка раз в секунду съедала клики
+  function cardParts(t) {
+    var active = isActive(t), files = filesOf(t);
+    var stats, bar = '';
+    if (active) {
+      stats = '<span>↓ ' + speed(t.download_speed) + '</span><span class="muted">↑ ' + speed(t.upload_speed) + '</span>' +
+        '<span>пиры ' + (t.active_peers || 0) + ' / ' + (t.total_peers || 0) + '</span><span class="muted">сидов ' + (t.connected_seeders || 0) + '</span>';
+      var cache = t.preloaded_bytes || 0, cap = cacheMb * 1048576;
+      bar = '<div class="bar thin" title="Кэш: ' + bytes(cache) + ' из ' + bytes(cap) + '"><i style="width:' + pct(cache, cap) + '%"></i></div>';
+    } else {
+      stats = '<span class="muted">не открыт · откроется при просмотре</span>';
+    }
+    var actions = '<button class="btn small" data-act="files">' + (openFiles[t.hash] ? 'Скрыть файлы' : 'Файлы' + (files.length ? ' (' + files.length + ')' : '')) + '</button>' +
+      (active ? '<button class="btn small" data-act="cache">Кэш</button><button class="btn small" data-act="drop" title="Закрыть торрент, кэш освободится">Закрыть</button>' : '') +
+      '<button class="btn small danger" data-act="rem">Удалить</button>';
+    return {
+      status: '<span class="pill ' + (STAT_CLASS[t.stat] || '') + '">' + esc(statusOf(t)) + '</span>' +
+        (t.torrent_size ? '<span>' + bytes(t.torrent_size) + '</span>' : '') +
+        (active && t.preloaded_bytes ? '<span>кэш ' + bytes(t.preloaded_bytes) + '</span>' : ''),
+      stats: stats, bar: bar, actions: actions
+    };
+  }
+
+  function posterHtml(t) {
+    var title = t.title || t.name || '?';
+    var letter = esc(title.replace(/^[^0-9A-Za-zА-Яа-яЁё]+/, '').charAt(0).toUpperCase() || '?');
+    if (!t.poster) return letter;
+    // Не загрузилась — буква вместо картинки
+    return '<img src="' + esc(t.poster) + '" alt="" onerror="this.parentNode.innerHTML=\'' + letter + '\'">';
+  }
+
+  function cardHtml(t) {
+    var p = cardParts(t);
+    return '<article class="tcard' + (isActive(t) ? ' active' : '') + '" data-hash="' + esc(t.hash) + '">' +
+      '<div class="tposter" data-act="files">' + posterHtml(t) + '</div>' +
+      '<div class="tbody">' +
+        '<div class="ttitle" data-act="files" title="' + esc(t.title || t.name || t.hash) + '">' + esc(t.title || t.name || t.hash) + '</div>' +
+        '<div class="tmeta" data-part="status">' + p.status + '</div>' +
+        '<div class="tstats" data-part="stats">' + p.stats + '</div>' +
+        '<div data-part="bar">' + p.bar + '</div>' +
+        '<div class="tactions" data-part="actions">' + p.actions + '</div>' +
+      '</div>' +
+      (openFiles[t.hash] ? '<div class="tfiles">' + filesHtml(t) + '</div>' : '') +
+      '</article>';
+  }
+
+  var torrentsLayout = '';
   function renderTorrents() {
-    var tb = $('list').tBodies[0];
-    if (!torrents.length) { torrentsLayout = ''; tb.innerHTML = '<tr><td colspan="7" class="empty">Торрентов нет</td></tr>'; return; }
+    var box = $('tlist'), list = visibleTorrents();
+    if (!list.length) {
+      torrentsLayout = '';
+      box.innerHTML = '<div class="empty">' + (torrents.length ? 'Ничего не нашлось' : 'Торрентов нет — добавьте magnet выше или начните просмотр в TorrStream') + '</div>';
+      return;
+    }
     var layout = [];
-    for (var i = 0; i < torrents.length; i++) layout.push(torrents[i].hash + (openFiles[torrents[i].hash] ? '+' + filesOf(torrents[i]).length : ''));
+    for (var i = 0; i < list.length; i++)
+      layout.push(list[i].hash + (isActive(list[i]) ? 'a' : '') + (openFiles[list[i].hash] ? '+' + filesOf(list[i]).length : '') + '|' + (list[i].poster || ''));
     layout = layout.join(',');
     if (layout !== torrentsLayout) {
       torrentsLayout = layout;
       var html = '';
-      for (var j = 0; j < torrents.length; j++) {
-        var t = torrents[j], cells = torrentCells(t);
-        html += '<tr data-hash="' + esc(t.hash) + '">';
-        for (var c = 0; c < cells.length; c++) html += '<td class="' + CELL_CLASS[c] + '">' + cells[c] + '</td>';
-        html += '</tr>';
-        if (openFiles[t.hash]) html += '<tr data-files="' + esc(t.hash) + '"><td colspan="7">' + filesTable(t) + '</td></tr>';
-      }
-      tb.innerHTML = html;
+      for (var j = 0; j < list.length; j++) html += cardHtml(list[j]);
+      box.innerHTML = html;
       return;
     }
-    var rows = tb.rows, k = 0;
-    for (var r = 0; r < rows.length; r++) {
-      if (!rows[r].getAttribute('data-hash')) continue;
-      var tc = torrentCells(torrents[k++]);
-      for (var x = 0; x < tc.length; x++) if (rows[r].cells[x].innerHTML !== tc[x]) rows[r].cells[x].innerHTML = tc[x];
+    var cards = box.children;
+    for (var k = 0; k < cards.length && k < list.length; k++) {
+      var parts = cardParts(list[k]);
+      for (var name in parts) {
+        var el = cards[k].querySelector('[data-part="' + name + '"]');
+        if (el && el.innerHTML !== parts[name]) el.innerHTML = parts[name];
+      }
     }
   }
 
-  function filesTable(t) {
+  function filesHtml(t) {
     var files = filesOf(t);
-    if (!files.length) return '<div class="muted">Список файлов ещё не получен (нет метаданных)</div>';
-    var html = '<div class="row" style="justify-content:space-between"><span class="muted">Файлов: ' + files.length +
-      ' — порядок и номера как у TorrServer (по имени, числа как числа)</span>' +
-      '<a href="/stream/' + encodeURIComponent((t.title || 'playlist') + '.m3u') + '?link=' + t.hash + '&m3u">плейлист M3U</a></div>' +
-      '<table class="files"><tbody>';
+    if (!files.length) return '<div class="muted">Список файлов ещё не получен — нет метаданных</div>';
+    var html = '<div class="row between"><span class="muted">Файлов: ' + files.length + '</span>' +
+      '<a class="btn small" href="/stream/' + encodeURIComponent((t.title || 'playlist') + '.m3u') + '?link=' + t.hash + '&m3u">Плейлист M3U</a></div><ul class="flist">';
     for (var i = 0; i < files.length; i++) {
-      var f = files[i], name = baseName(f.path);
+      var f = files[i], path = String(f.path || ''), name = baseName(path);
+      var dir = path.substring(0, path.length - name.length).replace(/\/$/, '');
       var url = '/stream/' + encodeURIComponent(name) + '?link=' + t.hash + '&index=' + f.id + '&play';
-      html += '<tr><td class="num muted">' + f.id + '</td><td class="title-cell">' + esc(f.path) + '</td><td class="num">' + bytes(f.length) + '</td>' +
-        '<td class="num"><a href="' + url + '" target="_blank">открыть</a> · <a href="#" data-act="preload" data-id="' + f.id + '">предзагрузка</a></td></tr>';
+      html += '<li><span class="fid">' + f.id + '</span>' +
+        '<span class="fname">' + esc(name) + '<small>' + bytes(f.length) + (dir ? ' · ' + esc(dir) : '') + '</small></span>' +
+        '<span class="facts"><a class="btn small" href="' + url + '" target="_blank">▶ Открыть</a>' +
+        '<button class="btn small" data-act="preload" data-id="' + f.id + '">Предзагрузка</button></span></li>';
     }
-    return html + '</tbody></table>';
+    return html + '</ul>';
   }
 
-  $('list').onclick = function (ev) {
+  $('list-filter').oninput = function () { listFilter = this.value.trim(); torrentsLayout = ''; renderTorrents(); };
+
+  $('tlist').onclick = function (ev) {
     var el = ev.target;
     while (el && el !== this && !el.getAttribute('data-act')) el = el.parentNode;
     if (!el || el === this) return;
     ev.preventDefault();
-    var row = el;
-    while (row && row.tagName !== 'TR') row = row.parentNode;
-    var hash = row && (row.getAttribute('data-hash') || row.getAttribute('data-files'));
+    var card = el;
+    while (card && card !== this && !card.getAttribute('data-hash')) card = card.parentNode;
+    var hash = card && card !== this ? card.getAttribute('data-hash') : null;
     if (!hash) return;
     var act = el.getAttribute('data-act');
     if (act === 'files') { openFiles[hash] = !openFiles[hash]; renderTorrents(); }
@@ -352,9 +469,11 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
     else if (act === 'drop') post('/torrents', { action: 'drop', hash: hash }, function () { loadTorrents(); });
     else if (act === 'rem') { if (confirm('Удалить торрент из списка и базы?')) post('/torrents', { action: 'rem', hash: hash }, function () { loadTorrents(); }); }
     else if (act === 'preload') {
-      el.textContent = 'идёт…';
+      el.textContent = 'Идёт…';
+      el.disabled = true;
       request('GET', '/stream?link=' + hash + '&index=' + el.getAttribute('data-id') + '&preload', null, function (err) {
-        el.textContent = err ? 'ошибка' : 'готово';
+        el.textContent = err ? 'Ошибка' : 'Готово';
+        el.disabled = false;
       });
     }
   };
@@ -437,13 +556,13 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
     cacheSkeleton(c.Hash);
 
     setHtml('c-sum', '<div class="row" style="justify-content:space-between"><h2>' + esc(t.title || c.Hash) + '</h2>' +
-      '<span class="muted">' + esc((c.Diag && c.Diag.State) || t.stat_string || '') + '</span></div>' +
+      '<span class="muted">' + esc(engineState((c.Diag && c.Diag.State) || '') || statusOf(t)) + '</span></div>' +
       (c.Diag && c.Diag.Error ? '<div class="err-text">' + esc(c.Diag.Error) + '</div>' : '') +
       '<div class="stats">' +
         stat('Скорость', '↓ ' + speed(t.download_speed) + ' · ↑ ' + speed(t.upload_speed)) +
         stat('Пиры', (t.active_peers || 0) + ' подключено · ' + (t.half_open_peers || 0) + ' подключаются · ' + (t.pending_peers || 0) + ' ждут · сидов ' + (t.connected_seeders || 0)) +
         stat('Кэш', bytes(c.Filled) + ' из ' + bytes(c.Capacity) + ' (' + pct(c.Filled, c.Capacity).toFixed(0) + '%)') +
-        stat('Служебный кэш', bytes(c.Pinned || 0) + ' — начало и конец файла (по 8 МБ или куску), вне кэша') +
+        stat('Служебный кэш', bytes(c.Pinned || 0) + ' · начало и конец файла') +
         stat('Кусков в памяти', completed + ' готово · ' + partial + ' качается') +
         stat('Кусок', bytes(pl) + ' · всего ' + c.PiecesCount) +
         stat('Окно вперёд', c.ReadAheadPieces + ' кусков (' + bytes(c.ReadAheadPieces * pl) + ')' + ' · назад ' + c.BehindPieces) +
@@ -456,6 +575,11 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
     drawStrip(c);
     drawMap(c);
   }
+
+  // Состояния TorrentManager MonoTorrent — по-русски
+  var ENGINE_STATES = { Downloading: 'Качает', Seeding: 'Раздаёт', Metadata: 'Получает метаданные', Hashing: 'Проверка',
+    Starting: 'Запуск', Stopping: 'Останавливается', Stopped: 'Остановлен', Paused: 'Пауза', Error: 'Ошибка', FetchingHashes: 'Получает хэши' };
+  function engineState(s) { return ENGINE_STATES[s] || s; }
 
   function stat(k, v) { return '<div class="stat"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
 

@@ -981,7 +981,29 @@ namespace TorrStreamTorrServer
                 log(e.Hash + ": закрыт");
             }
             try { if (e.SaveDir != null && Directory.Exists(e.SaveDir)) Directory.Delete(e.SaveDir, true); } catch { }
+            // Кэш закрытого торрента — мусор; отдать память ОС (TrimMemory из CloseIdle)
+            if (store != null || m != null) Interlocked.Exchange(ref trimAtMs, Now() + TrimDelayMs);
             return true;
+        }
+
+        // Сборка мусора после закрытия торрента: через TrimDelayMs после последнего
+        // закрытия (несколько подряд — одна сборка). Без неё массивы кэша лежали
+        // мусором до случайной полной сборки (в простое её нет — куча 100+ МБ при
+        // живых 4), а память процесс не отдавал: на VPS 157 МБ против 129 со сборкой
+        const long TrimDelayMs = 10000;
+        long trimAtMs = -1;
+
+        void TrimMemory()
+        {
+            long before = ProcessRssMb();
+            CollectGarbage();
+            log("память после закрытия торрента: процесс " + before + " → " + ProcessRssMb() + " МБ, куча .NET " + (GC.GetTotalMemory(false) >> 20) + " МБ");
+        }
+
+        static long ProcessRssMb()
+        {
+            try { using (var p = System.Diagnostics.Process.GetCurrentProcess()) return p.WorkingSet64 >> 20; }
+            catch { return -1; }
         }
 
         // Раз в 2 с: торренты без читателей дольше TorrentDisconnectTimeout — закрыть.
@@ -1031,6 +1053,9 @@ namespace TorrStreamTorrServer
                         lock (sync) if (!e.InDb && e.Manager == null && e.Activation == null) entries.Remove(e.Hash);
                 });
             }
+            long trimAt = Interlocked.Read(ref trimAtMs);
+            if (trimAt >= 0 && now >= trimAt && Interlocked.CompareExchange(ref trimAtMs, -1, trimAt) == trimAt)
+                Task.Run(() => { try { TrimMemory(); } catch (Exception ex) { log("сборка мусора: " + ex.Message); } });
         }
 
         // Есть что качать: идёт предзагрузка или в окне главного читателя есть
@@ -1572,6 +1597,21 @@ namespace TorrStreamTorrServer
             return plus > 0 ? v.Substring(0, plus) : v;
         }
 
+        /// <summary>
+        /// Полная сборка мусора с уплотнением кучи больших объектов (там куски кэша).
+        /// Обычная сборка память ОС не отдаёт: .NET держит освобождённое у себя, и
+        /// процесс после закрытого торрента так и оставался на ~150 МБ при куче в 8.
+        /// В .NET 7+ режим Aggressive (4) отдаёт ОС всё свободное; на старых рантаймах
+        /// (Tizen — .NET Core 3.1, Mono) его нет — обычная полная сборка
+        /// </summary>
+        public static void CollectGarbage()
+        {
+            try { System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce; } catch { }   // Mono — может не уметь
+            try { GC.Collect(2, (GCCollectionMode)4, true, true); }
+            catch { GC.Collect(2, GCCollectionMode.Forced, true, true); }
+            GC.WaitForPendingFinalizers();
+        }
+
         /// <summary>collect — сначала полная сборка мусора: что останется в gc_mb, то и правда занято</summary>
         public void WriteVersion(JsonWriter w, int httpPort, bool collect = false)
         {
@@ -1583,12 +1623,7 @@ namespace TorrStreamTorrServer
                 foreach (var e in entries.Values) if (e.Store != null) filled += e.Store.Filled;
             }
             long gcBefore = GC.GetTotalMemory(false);
-            if (collect)
-            {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-            }
+            if (collect) CollectGarbage();
             long gc = GC.GetTotalMemory(false);
             // Память всего процесса (RSS): куча .NET, сам рантайм, код, стеки потоков, сокеты
             long rss = -1, peak = -1;

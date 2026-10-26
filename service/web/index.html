@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#171a21">
+<meta name="theme-color" content="#13161d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>MonoServer</title>
 <!--
   Страница отладки службы (GET /, WebPage.cs). Только API TorrServer и служебное:
@@ -11,137 +12,196 @@
   ES5 без сборки — открывается и в браузере телевизора (Chrome 56+).
 -->
 <style>
+/* Тёмная тема по умолчанию, светлая — по настройке системы */
 :root {
-  --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
-  --text: #e6e8ec; --muted: #8b93a3; --accent: #5aa9ff;
-  --ok: #3fb950; --part: #d29922; --bad: #f85149; --win: #1f3a5c; --win2: #2b4f7a;
-  --empty: #262b35; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --bg: #0b0d12; --panel: #13161d; --panel2: #1a1e27; --panel3: #222734; --line: #262b37; --line2: #323848;
+  --text: #e8eaf0; --muted: #8a92a6; --accent: #6ea8ff; --accent2: #8b7bff; --accent-bg: rgba(110,168,255,.12);
+  --ok: #3ccf74; --part: #e0a93a; --bad: #ff5d5d; --win: #1d3557; --win2: #2f5c96; --empty: #232835;
+  --heap: #8b7bff; --other: #3a4152;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  --head: rgba(19,22,29,.82); --logbg: #080a0e;
+  --radius: 14px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f6fa; --panel: #ffffff; --panel2: #f1f3f8; --panel3: #e7eaf2; --line: #e2e6ee; --line2: #d3d9e5;
+    --text: #151925; --muted: #667089; --accent: #2f6fe4; --accent2: #6b55e8; --accent-bg: rgba(47,111,228,.1);
+    --ok: #1fa85a; --part: #c98a12; --bad: #e03b3b; --win: #cfe0fb; --win2: #8cb3f2; --empty: #e4e8f0;
+    --heap: #6b55e8; --other: #c4cad7;
+    --shadow: 0 1px 2px rgba(20,30,60,.06), 0 8px 24px rgba(20,30,60,.08);
+    --head: rgba(255,255,255,.85); --logbg: #fbfcfe;
+    color-scheme: light;
+  }
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; }
-.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
-h1 { font-size: 16px; margin: 0; font-weight: 600; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; color: var(--muted); font-size: 12px; white-space: nowrap; }
-.chip b { color: var(--text); font-weight: 500; }
-.chip.err { border-color: var(--bad); color: var(--bad); }
-nav { display: flex; gap: 4px; margin-top: 8px; overflow-x: auto; }
-nav button { background: none; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 6px; font: inherit; cursor: pointer; white-space: nowrap; }
-nav button.on { background: var(--panel2); color: var(--text); }
-nav .ico, nav .l-short { display: none; }
-#ver-short { display: none; color: var(--muted); font-size: 12px; }
-#ver-toggle { display: none; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 999px; width: 28px; height: 28px; font: inherit; cursor: pointer; margin-left: auto; }
+svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -4px; }
+
+/* Шапка: марка, вкладки, сводка и кнопка «Сервер» */
+header { position: sticky; top: 0; z-index: 5; background: var(--head); -webkit-backdrop-filter: saturate(160%) blur(14px); backdrop-filter: saturate(160%) blur(14px); border-bottom: 1px solid var(--line); }
+.top { display: flex; align-items: center; gap: 16px; max-width: 1280px; margin: 0 auto; padding: 10px 16px; }
+.brand { display: flex; align-items: center; gap: 10px; flex: none; }
+.logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; letter-spacing: .5px; box-shadow: 0 4px 14px rgba(110,120,255,.35); }
+h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+nav { display: flex; gap: 2px; padding: 3px; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
+nav button { display: flex; align-items: center; gap: 7px; background: none; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 9px; font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s; }
+nav button:hover { color: var(--text); }
+nav button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+nav .l-short { display: none; }
+.status { margin-left: auto; display: flex; align-items: center; gap: 10px; min-width: 0; }
+#ver-short { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+#ver-short b { color: var(--text); font-weight: 600; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(60,207,116,.18); margin-right: 6px; vertical-align: 1px; }
+.dot.bad { background: var(--bad); box-shadow: 0 0 0 3px rgba(255,93,93,.18); }
+#ver-toggle { display: flex; align-items: center; gap: 6px; flex: none; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 6px 12px; font: inherit; font-weight: 500; cursor: pointer; }
+#ver-toggle:hover, header.open #ver-toggle { border-color: var(--accent); color: var(--accent); }
+
+/* Панель «Сервер» (бывшая info): выпадает под шапкой */
+#info { display: none; max-width: 1280px; margin: 0 auto; padding: 0 16px 14px; }
+header.open #info { display: block; }
+.info-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
+.ibox { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); min-width: 0; }
+.ibox h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mem-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mem-big { font-size: 30px; font-weight: 700; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+.mem-sub { color: var(--muted); font-size: 13px; }
+.membar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--empty); margin: 12px 0 10px; }
+.membar i { display: block; height: 100%; transition: width .4s; }
+.mem-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mrow { background: var(--panel2); border-radius: 10px; padding: 8px 10px; }
+.mrow .k { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.mrow .k i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+.mrow .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mrow .h { color: var(--muted); font-size: 11.5px; line-height: 1.35; margin-top: 2px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; word-break: break-word; }
+.gc-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+
 /* Карточки торрентов */
-.tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
-.tcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; grid-template-columns: 78px 1fr; gap: 12px; align-items: start; min-width: 0; }
-.tcard.active { border-color: #2c4a35; }
-.tposter { width: 78px; height: 112px; border-radius: 8px; background: linear-gradient(135deg, #24304a, #1b2230); overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #9fb3d9; font-size: 30px; font-weight: 600; }
+.tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.tcard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: grid; grid-template-columns: 78px 1fr; gap: 14px; align-items: start; min-width: 0; box-shadow: var(--shadow); transition: border-color .15s, transform .15s; }
+.tcard:hover { border-color: var(--line2); }
+.tcard.active { border-color: rgba(60,207,116,.35); }
+.tposter { width: 78px; height: 112px; border-radius: 10px; background: linear-gradient(140deg, var(--accent), var(--accent2)); overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: pointer; color: rgba(255,255,255,.92); font-size: 30px; font-weight: 700; }
 .tposter img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.tbody { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.ttitle { font-weight: 600; line-height: 1.3; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.tbody { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.ttitle { font-weight: 600; font-size: 15px; line-height: 1.3; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
 .tmeta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
-.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--panel2); color: var(--muted); }
-.pill.ok { background: #183524; color: #6fdd8b; }
-.pill.warn { background: #3a2e12; color: #e3b341; }
-.pill.info { background: #172c45; color: #7fb8ff; }
-.tstats { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--panel2); color: var(--muted); }
+.pill.ok { background: rgba(60,207,116,.14); color: var(--ok); }
+.pill.warn { background: rgba(224,169,58,.15); color: var(--part); }
+.pill.info { background: var(--accent-bg); color: var(--accent); }
+.tstats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .tstats .muted { font-size: 12px; }
 .bar.thin { height: 6px; }
 .tactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.tfiles { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 8px; }
+.tfiles { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; }
 .flist { list-style: none; margin: 6px 0 0; padding: 0; }
-.flist li { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.flist li { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .flist li:last-child { border-bottom: 0; }
 .flist .fid { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 .flist .fname { word-break: break-word; min-width: 0; }
 .flist .fname small { display: block; color: var(--muted); }
 .flist .facts { display: flex; gap: 6px; }
 .between { justify-content: space-between; }
-a.btn { display: inline-block; text-decoration: none; color: var(--text); }
-main { padding: 16px; max-width: 1280px; margin: 0 auto; }
+main { padding: 18px 16px 24px; max-width: 1280px; margin: 0 auto; }
 section { display: none; }
-section.on { display: block; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
-.card h2 { font-size: 14px; margin: 0 0 8px; font-weight: 600; }
+section.on { display: block; animation: fade .18s ease-out; }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
+.card h2 { font-size: 15px; margin: 0 0 10px; font-weight: 600; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .grow { flex: 1 1 200px; min-width: 0; }
-input, select, button.btn { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
-input:focus, select:focus, button:focus { outline: 2px solid var(--accent); outline-offset: 0; }
-button.btn { cursor: pointer; }
-button.btn:hover { border-color: var(--accent); }
+input, select, button.btn, a.btn { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; transition: border-color .15s, background .15s; }
+input::placeholder { color: var(--muted); }
+input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.btn, a.btn { cursor: pointer; font-weight: 500; display: inline-block; text-decoration: none; }
+button.btn:hover, a.btn:hover { border-color: var(--accent); text-decoration: none; }
+button.btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); border-color: transparent; color: #fff; }
+button.btn.primary:hover { filter: brightness(1.08); }
 button.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
-button.btn.small, a.btn.small { padding: 3px 10px; font-size: 13px; }
-a.btn { font: inherit; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
-a.btn:hover { border-color: var(--accent); text-decoration: none; }
+button.btn.small, a.btn.small { padding: 4px 11px; font-size: 13px; border-radius: 8px; }
+button.btn:disabled { opacity: .6; cursor: default; }
+input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; vertical-align: -3px; }
 .muted { color: var(--muted); }
 .mono { font-family: var(--mono); font-size: 12px; }
 .err-text { color: var(--bad); }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; }
+tbody tr:hover td { background: var(--panel2); }
 td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .scroll-x { overflow-x: auto; }
-.title-cell { word-break: break-word; }
-.files { margin: 6px 0 2px; }
-.files td { padding: 3px 8px; font-size: 13px; }
-.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-.stat { background: var(--panel2); border-radius: 8px; padding: 8px 10px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+.stat { background: var(--panel2); border-radius: 10px; padding: 9px 11px; }
 .stat .k { color: var(--muted); font-size: 12px; }
-.stat .v { font-size: 16px; font-variant-numeric: tabular-nums; }
-.bar { position: relative; height: 10px; background: var(--empty); border-radius: 5px; overflow: hidden; }
-.bar > i { position: absolute; top: 0; bottom: 0; left: 0; background: var(--ok); }
+.stat .v { font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.bar { position: relative; height: 10px; background: var(--empty); border-radius: 6px; overflow: hidden; }
+.bar > i { position: absolute; top: 0; bottom: 0; left: 0; background: var(--ok); border-radius: inherit; }
 .bar > i.win { background: var(--win2); }
-.bar > i.pos { width: 2px; background: var(--bad); }
-.reader { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-top: 8px; }
-.reader.primary { border-color: var(--accent); }
+.bar > i.pos { width: 2px; background: var(--bad); border-radius: 0; }
+.reader { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 8px; }
+.reader.primary { border-color: var(--accent); background: var(--accent-bg); }
 .reader .name { font-weight: 500; word-break: break-all; }
-.badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--win2); color: #fff; margin-left: 6px; vertical-align: 1px; }
+.badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--accent); color: #fff; margin-left: 6px; vertical-align: 1px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 6px 0; }
-.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
-canvas { display: block; width: 100%; image-rendering: pixelated; }
-#tip { position: fixed; pointer-events: none; background: #000d; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; display: none; z-index: 10; white-space: nowrap; }
-#log { background: #0a0c10; border: 1px solid var(--line); border-radius: 8px; height: calc(100vh - 230px); min-height: 300px; overflow: auto; padding: 8px 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+canvas { display: block; width: 100%; image-rendering: pixelated; border-radius: 6px; }
+#tip { position: fixed; pointer-events: none; background: rgba(10,12,18,.92); color: #fff; padding: 5px 9px; border-radius: 8px; font-size: 12px; display: none; z-index: 10; white-space: nowrap; }
+#log { background: var(--logbg); border: 1px solid var(--line); border-radius: var(--radius); height: calc(100vh - 240px); min-height: 300px; overflow: auto; padding: 10px 12px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 #log .l-err { color: var(--bad); }
 #log .l-warn { color: var(--part); }
 #log .l-http { color: var(--muted); }
-#log .l-peer { color: #7ee0c3; }
-#log mark { background: #5aa9ff55; color: inherit; }
-.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 16px; }
-.set-grid label { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--panel2); padding: 6px 10px; border-radius: 6px; }
+#log .l-peer { color: #2fb69a; }
+#log mark { background: var(--accent-bg); color: inherit; outline: 1px solid var(--accent); border-radius: 2px; }
+.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px 14px; }
+.set-grid label { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--panel2); padding: 8px 12px; border-radius: 10px; }
 .set-grid label span { overflow: hidden; text-overflow: ellipsis; }
 .set-grid input[type=number], .set-grid input[type=text] { width: 120px; }
-.empty { color: var(--muted); padding: 16px 0; text-align: center; }
-/* Телефон в вертикальном положении: вкладки внизу под большой палец, шапка
-   в одну строку (подробности — по ⓘ), крупные кнопки и поля 16 px (iOS не
-   увеличивает страницу при вводе) */
-@media (max-width: 700px) {
-  header { position: sticky; padding: 8px 12px; }
-  h1 { font-size: 15px; }
-  .top { flex-wrap: nowrap; gap: 8px; }
-  #ver-short { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #ver-toggle { display: block; flex: none; }
-  #ver { display: none; margin-top: 8px; }
-  header.open .top { flex-wrap: wrap; }
-  header.open #ver { display: flex; width: 100%; order: 5; }
-  nav { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; z-index: 8; background: var(--panel); border-top: 1px solid var(--line);
-        justify-content: space-around; gap: 0; padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); overflow: visible; }
-  nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 2px; font-size: 11px; border-radius: 10px; }
-  nav button.on { background: var(--panel2); color: var(--accent); }
-  nav .ico { display: block; font-size: 19px; line-height: 1.1; }
+.empty { color: var(--muted); padding: 28px 0; text-align: center; }
+@media (max-width: 1000px) {
+  .info-grid { grid-template-columns: 1fr; }
   nav .l-long { display: none; }
   nav .l-short { display: inline; }
-  main { padding: 10px 10px calc(78px + env(safe-area-inset-bottom)); }
-  .card { padding: 10px 12px; border-radius: 12px; }
+  .top { gap: 12px; }
+}
+/* Телефон: вкладки внизу под большой палец, шапка в одну строку, крупные
+   кнопки и поля 16 px (iOS не увеличивает страницу при вводе) */
+@media (max-width: 700px) {
+  /* backdrop-filter у шапки делает её контейнером для position: fixed — нижнее
+     меню (оно внутри шапки) прилипало бы к её низу, а не к низу экрана */
+  header { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--panel); }
+  .top { gap: 10px; padding: 8px 12px; }
+  h1 { font-size: 15px; }
+  .logo { width: 28px; height: 28px; }
+  #ver-toggle .l-long { display: none; }
+  #ver-toggle { padding: 6px 9px; }
+  /* Над нижним меню (≈ 70 px) — панель прокручивается сама */
+  #info { padding: 0 10px 10px; max-height: calc(100vh - 170px - env(safe-area-inset-bottom)); overflow: auto; -webkit-overflow-scrolling: touch; }
+  .mem-big { font-size: 26px; }
+  .mem-rows { grid-template-columns: 1fr; }
+  nav { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); margin: 0; z-index: 8; background: var(--head);
+        -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-radius: 16px; box-shadow: var(--shadow); justify-content: space-around; padding: 4px; overflow: visible; }
+  nav button { flex: 1; flex-direction: column; gap: 2px; padding: 7px 2px; font-size: 11px; border-radius: 12px; }
+  nav button.on { color: var(--accent); }
+  nav svg.i { width: 20px; height: 20px; }
+  nav .l-long { display: none; }
+  nav .l-short { display: inline; }
+  main { padding: 10px 10px calc(90px + env(safe-area-inset-bottom)); }
+  .card { padding: 12px; }
   .hide-sm { display: none; }
-  input, select, button.btn, a.btn { font-size: 16px; min-height: 40px; }
+  input, select, button.btn, a.btn { font-size: 16px; min-height: 42px; }
   button.btn.small, a.btn.small { font-size: 14px; min-height: 36px; padding: 4px 12px; }
   input[type=checkbox] { min-height: 0; width: 20px; height: 20px; vertical-align: -4px; }
   .row > .grow { flex-basis: 100%; }
   .tgrid { grid-template-columns: 1fr; gap: 10px; }
-  .tcard { grid-template-columns: 64px 1fr; gap: 10px; padding: 10px; }
+  .tcard { grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; }
   .tposter { width: 64px; height: 92px; font-size: 24px; }
   .tactions .btn { flex: 1 1 auto; text-align: center; }
   .flist li { grid-template-columns: 22px 1fr; }
@@ -151,7 +211,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
   .stat .v { font-size: 14px; }
   .set-grid { grid-template-columns: 1fr; }
   .set-grid input[type=number], .set-grid input[type=text] { width: 110px; }
-  #log { height: calc(100vh - 250px); min-height: 240px; font-size: 11px; }
+  #log { height: calc(100vh - 270px); min-height: 240px; font-size: 11px; }
   #tip { display: none !important; }
 }
 </style>
@@ -159,17 +219,39 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
 <body>
 <header>
   <div class="top">
-    <h1>MonoServer</h1>
-    <span id="ver-short">загрузка…</span>
-    <button id="ver-toggle" type="button" title="Подробности о службе">ⓘ</button>
-    <div class="chips" id="ver"><span class="chip">загрузка…</span></div>
+    <div class="brand"><div class="logo">MS</div><h1>MonoServer</h1></div>
+    <nav id="nav">
+      <button data-tab="torrents" class="on"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="l-long">Торренты</span><span class="l-short">Торренты</span></button>
+      <button data-tab="cache"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4"/></svg><span class="l-long">Кэш и читатели</span><span class="l-short">Кэш</span></button>
+      <button data-tab="log"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="l-long">Журнал</span><span class="l-short">Журнал</span></button>
+      <button data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="l-long">Настройки</span><span class="l-short">Настройки</span></button>
+    </nav>
+    <div class="status">
+      <span id="ver-short">загрузка…</span>
+      <button id="ver-toggle" type="button" title="Сервер: память, версия, сеть"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span class="l-long">Сервер</span></button>
+    </div>
   </div>
-  <nav id="nav">
-    <button data-tab="torrents" class="on"><span class="ico">▦</span><span class="l-long">Торренты</span><span class="l-short">Торренты</span></button>
-    <button data-tab="cache"><span class="ico">◔</span><span class="l-long">Кэш и читатели</span><span class="l-short">Кэш</span></button>
-    <button data-tab="log"><span class="ico">☰</span><span class="l-long">Журнал</span><span class="l-short">Журнал</span></button>
-    <button data-tab="settings"><span class="ico">⚙</span><span class="l-long">Настройки</span><span class="l-short">Настройки</span></button>
-  </nav>
+  <!-- Панель «Сервер»: память всего процесса и что из неё что, версия, сеть -->
+  <div id="info">
+    <div class="info-grid">
+      <div class="ibox">
+        <h3>Память <button class="btn small" id="gc-run" type="button" title="Полная сборка мусора: после неё «Куча .NET» — то, что действительно занято">Собрать мусор</button></h3>
+        <div class="mem-top"><span class="mem-big" id="m-rss">—</span><span class="mem-sub" id="m-rss-sub">занимает процесс MonoServer</span></div>
+        <div class="membar" id="m-bar" title="Из чего состоит память процесса"></div>
+        <div class="mem-rows">
+          <div class="mrow"><div class="k"><i style="background:var(--ok)"></i>Кэш кусков</div><div class="v" id="m-cache">—</div><div class="h">Скачанные куски открытых торрентов. Не больше «кэша на торрент» на каждый.</div></div>
+          <div class="mrow"><div class="k"><i style="background:var(--heap)"></i>Куча .NET (GC)</div><div class="v" id="m-gc">—</div><div class="h">Все объекты .NET, включая кэш и ещё не собранный мусор. Сборщик чистит её сам, когда она подрастает, — поэтому число держится у одного уровня.</div></div>
+          <div class="mrow"><div class="k"><i style="background:var(--other)"></i>Прочее</div><div class="v" id="m-other">—</div><div class="h">Рантайм .NET, код, стеки потоков, буферы сокетов и запас кучи, который сборщик держит про запас.</div></div>
+          <div class="mrow"><div class="k">Потоки</div><div class="v" id="m-threads">—</div><div class="h" id="m-gc-count">Сборок мусора: —</div></div>
+        </div>
+        <div class="gc-line" id="gc-msg"></div>
+      </div>
+      <div class="ibox">
+        <h3>Сервер</h3>
+        <dl class="kv" id="ver"><dt>загрузка…</dt><dd></dd></dl>
+      </div>
+    </div>
+  </div>
 </header>
 
 <main>
@@ -179,7 +261,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       <form id="add-form" class="row">
         <input id="add-link" class="grow" placeholder="magnet:, хэш или ссылка на .torrent" autocomplete="off">
         <label class="muted"><input type="checkbox" id="add-save"> в базу</label>
-        <button class="btn" type="submit">Добавить</button>
+        <button class="btn primary" type="submit">Добавить</button>
       </form>
       <div id="add-msg" class="muted" style="margin-top:6px"></div>
     </div>
@@ -228,7 +310,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
       <p class="muted" style="margin-top:0">Кэш — в памяти, на торрент. «Вперёд» — доля кэша перед позицией читателя (ReaderReadAHead).</p>
       <form id="set-form"><div class="set-grid" id="set-grid"></div>
         <div class="row" style="margin-top:12px">
-          <button class="btn" type="submit">Сохранить</button>
+          <button class="btn primary" type="submit">Сохранить</button>
           <button class="btn danger" type="button" id="set-def">По умолчанию</button>
           <span class="muted" id="set-msg"></span>
         </div>
@@ -298,28 +380,69 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
   }
 
   // ==================== версия ====================
+  function mb(n) { return n == null || n < 0 ? '—' : n >= 1024 ? (n / 1024).toFixed(2) + ' ГБ' : n + ' МБ'; }
+
+  function renderVersion(v) {
+    // Память: процесс целиком (RSS) = кэш кусков + остальная куча .NET + прочее
+    var rss = v.rss_mb, gc = Math.max(0, v.gc_mb || 0), cache = Math.min(Math.max(0, v.memory_mb || 0), gc);
+    var known = rss >= 0, total = known ? Math.max(rss, gc) : gc;
+    var other = known ? Math.max(0, rss - gc) : -1;
+    $('m-rss').textContent = known ? mb(rss) : 'нет данных';
+    $('m-rss-sub').textContent = known ? 'занимает процесс MonoServer' + (v.peak_rss_mb > 0 ? ' · пик ' + mb(v.peak_rss_mb) : '') : 'система не отдала размер процесса';
+    $('m-cache').textContent = mb(cache);
+    $('m-gc').textContent = mb(gc);
+    $('m-other').textContent = mb(other);
+    $('m-threads').textContent = v.threads >= 0 ? v.threads : '—';
+    $('m-gc-count').textContent = v.gc_count ? 'Сборок мусора с запуска: лёгких ' + v.gc_count[0] + ', средних ' + v.gc_count[1] + ', полных ' + v.gc_count[2] : '';
+    var bar = '';
+    if (total > 0) {
+      bar += '<i style="width:' + pct(cache, total) + '%;background:var(--ok)" title="Кэш кусков ' + mb(cache) + '"></i>';
+      bar += '<i style="width:' + pct(gc - cache, total) + '%;background:var(--heap)" title="Остальная куча .NET ' + mb(gc - cache) + '"></i>';
+      if (other > 0) bar += '<i style="width:' + pct(other, total) + '%;background:var(--other)" title="Прочее ' + mb(other) + '"></i>';
+    }
+    $('m-bar').innerHTML = bar;
+
+    var rows = [
+      ['Служба', v.service], ['Движок', v.engine], ['Рантайм', v.runtime + ' · ' + v.arch],
+      ['Кэш на торрент', v.cache_mb + ' МБ'], ['Торрентов', v.torrents + ' · открыто ' + v.active],
+      ['DHT', v.dht || '—'], ['Ретрекеры', v.trackers || '—'],
+      ['Порты', 'HTTP ' + v.port + ' · пиры ' + v.peers_port], ['Работает', duration(v.uptime_s)]
+    ];
+    var html = '';
+    for (var i = 0; i < rows.length; i++) html += '<dt>' + esc(rows[i][0]) + '</dt><dd>' + esc(rows[i][1]) + '</dd>';
+    if (!v.evict) html += '<dt class="err-text">evict</dt><dd class="err-text" title="Вытесненные куски не скачаются заново при перемотке назад">недоступен</dd>';
+    if (v.error) html += '<dt class="err-text">Ошибка</dt><dd class="err-text">' + esc(v.error) + '</dd>';
+    $('ver').innerHTML = html;
+    if (v.cache_mb) cacheMb = v.cache_mb;
+    // Память — первой: на телефоне строка обрезается справа
+    $('ver-short').innerHTML = '<span class="dot' + (v.error ? ' bad' : '') + '"></span>память <b>' + esc(mb(known ? rss : gc)) + '</b>' +
+      ' · открыто <b>' + (v.active || 0) + '</b> · ' + esc(v.service);
+  }
+
   function loadVersion() {
     request('GET', '/version', null, function (err, v) {
-      var box = $('ver');
-      if (err || !v || typeof v !== 'object') { box.innerHTML = '<span class="chip err">' + esc(err || 'нет ответа') + '</span>'; return; }
-      var chips = [
-        ['служба', v.service], ['движок', v.engine], ['', v.runtime + ' · ' + v.arch],
-        ['память', v.memory_mb + ' МБ кэша · GC ' + v.gc_mb + ' МБ'], ['кэш на торрент', v.cache_mb + ' МБ'],
-        ['торрентов', v.torrents + ' (открыто ' + v.active + ')'], ['DHT', v.dht || '—'], ['ретрекеры', v.trackers || '—'],
-        ['порт пиров', v.peers_port], ['работает', duration(v.uptime_s)]
-      ];
-      var html = '';
-      for (var i = 0; i < chips.length; i++) html += '<span class="chip">' + (chips[i][0] ? esc(chips[i][0]) + ' ' : '') + '<b>' + esc(chips[i][1]) + '</b></span>';
-      if (!v.evict) html += '<span class="chip err" title="Вытесненные куски не скачаются заново при перемотке назад">evict недоступен</span>';
-      if (v.error) html += '<span class="chip err">' + esc(v.error) + '</span>';
-      box.innerHTML = html;
-      if (v.cache_mb) cacheMb = v.cache_mb;
-      $('ver-short').textContent = v.service + ' · ' + (v.active || 0) + ' откр. · DHT ' + String(v.dht || '—').split(',')[0] + ' · ' + duration(v.uptime_s);
+      if (err || !v || typeof v !== 'object') {
+        $('ver-short').innerHTML = '<span class="dot bad"></span><span class="err-text">' + esc(err || 'нет ответа') + '</span>';
+        return;
+      }
+      renderVersion(v);
     });
   }
   $('ver-toggle').onclick = function () {
     var h = document.getElementsByTagName('header')[0];
     h.className = h.className === 'open' ? '' : 'open';
+  };
+  $('gc-run').onclick = function () {
+    var btn = this;
+    btn.disabled = true;
+    $('gc-msg').textContent = 'Собираю…';
+    request('GET', '/version?gc', null, function (err, v) {
+      btn.disabled = false;
+      if (err || !v || typeof v !== 'object') { $('gc-msg').innerHTML = '<span class="err-text">' + esc(err || 'нет ответа') + '</span>'; return; }
+      renderVersion(v);
+      $('gc-msg').textContent = 'Освобождено ' + mb(Math.max(0, v.gc_freed_mb || 0)) + ' — в куче осталось ' + mb(v.gc_mb) +
+        '. Память процесса ОС заберёт не сразу: .NET держит освобождённое про запас.';
+    });
   };
 
   // ==================== торренты ====================
@@ -652,7 +775,13 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
     for (var i = 0; i < rs.length; i++) if (rs[i].Reader === id) return true;
     return false;
   }
-  var COLORS = { empty: '#262b35', part: '#d29922', ok: '#3fb950', win: '#1f3a5c', reader: '#f85149', gap: '#171a21' };
+  // Цвета карты — из CSS-переменных темы (светлая/тёмная), перечитываются при каждой отрисовке
+  var COLORS = { empty: '#232835', part: '#e0a93a', ok: '#3ccf74', win: '#1d3557', reader: '#ff5d5d' };
+  function themeColors() {
+    if (!window.getComputedStyle) return;
+    var cs = getComputedStyle(document.documentElement), map = { empty: '--empty', part: '--part', ok: '--ok', win: '--win', reader: '--bad' };
+    for (var k in map) { var v = cs.getPropertyValue(map[k]).trim(); if (v) COLORS[k] = v; }
+  }
 
   function setupCanvas(cv, h) {
     var w = cv.clientWidth || cv.parentNode.clientWidth;
@@ -684,6 +813,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
   // Полоса вокруг главного читателя: что держим позади и окно вперёд, крупно
   var stripRange = null, mapGeom = null;
   function drawStrip(c) {
+    themeColors();
     var cv = $('strip'), r = primaryReader(c);
     if (!cv) return;
     if (!r) { cv.style.display = 'none'; $('strip-title').textContent = ''; stripRange = null; return; }
@@ -704,6 +834,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; }
   }
 
   function drawMap(c) {
+    themeColors();
     var cv = $('map');
     if (!cv || !c.PiecesCount) { if (cv) cv.style.display = 'none'; return; }
     var rg = mapRange(c), n = rg.to - rg.from + 1;

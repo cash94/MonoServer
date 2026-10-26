@@ -323,7 +323,8 @@ namespace TorrStreamTorrServer
                 if (path == "/version")
                 {
                     var w = new JsonWriter();
-                    engine.WriteVersion(w, port);
+                    // ?gc — сначала собрать мусор (кнопка на странице отладки, проверка утечек)
+                    engine.WriteVersion(w, port, req.Has("gc"));
                     return SendJson(s, req, w.ToString());
                 }
                 if (path == "/log")

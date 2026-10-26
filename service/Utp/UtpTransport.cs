@@ -64,9 +64,42 @@ namespace TorrStreamTorrServer.Utp
         /// <summary>uTP-соединение, если подключились по uTP</summary>
         public UtpPeerConnection Utp => active as UtpPeerConnection;
 
+        /// <summary>Подключились пробивкой NAT (BEP 55, Holepunch.cs)</summary>
+        public bool Punched { get; private set; }
+
         bool UtpUsable => utp != null && utp.Enabled && utp.Status == ListenerStatus.Listening;
 
         public async ReusableTask ConnectAsync()
+        {
+            // К адресу идёт пробивка NAT (ut_holepunch connect): uTP уже начат,
+            // TCP за NAT не пройдёт — ждём только его
+            var punch = HolePunch.TakePending(endPoint);
+            if (punch != null)
+            {
+                utpConnection = punch.Out;
+                if (Disposed) { punch.Out.Dispose(); throw new ObjectDisposedException(nameof(HybridPeerConnection)); }
+                bool ok;
+                // Подключилось — ещё решить с встречным входящим (близнецом), кто остаётся
+                try { ok = await punch.OutConnect.ConfigureAwait(false) && await HolePunch.KeepOutgoing(punch).ConfigureAwait(false); }
+                catch { ok = false; }
+                if (!ok) throw new SocketException((int)SocketError.TimedOut);
+                Won(punch.Out, true);
+                Punched = true;
+                return;
+            }
+            try
+            {
+                await ConnectDirectAsync();
+            }
+            catch
+            {
+                // Не достучались — может, пир за NAT: попросить пира, приславшего адрес по PEX, свести нас
+                if (!Disposed) HolePunch.ConnectFailed(endPoint);
+                throw;
+            }
+        }
+
+        async ReusableTask ConnectDirectAsync()
         {
             if (!UtpUsable)
             {
@@ -164,10 +197,13 @@ namespace TorrStreamTorrServer.Utp
             }
         }
 
-        public ReusableTask<int> ReceiveAsync(Memory<byte> buffer)
+        public async ReusableTask<int> ReceiveAsync(Memory<byte> buffer)
         {
             var c = active ?? throw new InvalidOperationException("Не подключено");
-            return c.ReceiveAsync(buffer);
+            int n = await c.ReceiveAsync(buffer).ConfigureAwait(false);
+            // Следом ядро декодирует сообщение в этом же потоке — так ut_holepunch узнаёт отправителя
+            HolePunch.Received(this);
+            return n;
         }
 
         public ReusableTask<int> SendAsync(Memory<byte> buffer)
@@ -195,10 +231,21 @@ namespace TorrStreamTorrServer.Utp
         {
             this.tcp = tcp;
             this.utp = utp;
-            tcp.ConnectionReceived += (s, e) => ConnectionReceived?.Invoke(this, e);
+            // Входящие — в TrackedPeerConnection: ut_holepunch узнаёт по ним отправителя (Holepunch.cs)
+            tcp.ConnectionReceived += (s, e) => Deliver(new TrackedPeerConnection(e.Connection, false), e.InfoHash);
             tcp.StatusChanged += (s, e) => StatusChanged?.Invoke(this, e);
             if (utp != null)
-                utp.ConnectionReceived += (s, e) => ConnectionReceived?.Invoke(this, e);
+                utp.ConnectionReceived += (s, e) =>
+                {
+                    // Встречный SYN пира, которого мы пробиваем: сначала решить с нашим исходящим
+                    if (!HolePunch.HoldIncoming(e.Connection as UtpPeerConnection, c => Deliver(c, e.InfoHash)))
+                        Deliver(new TrackedPeerConnection(e.Connection, false), e.InfoHash);
+                };
+        }
+
+        void Deliver(IPeerConnection connection, MonoTorrent.InfoHash infoHash)
+        {
+            ConnectionReceived?.Invoke(this, new PeerConnectionEventArgs(connection, infoHash));
         }
 
         public event EventHandler<PeerConnectionEventArgs> ConnectionReceived;

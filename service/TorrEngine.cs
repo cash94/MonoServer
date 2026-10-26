@@ -223,9 +223,17 @@ namespace TorrStreamTorrServer
             dhtBoot.PeersFound = (ih, peers) => Get(ih.ToHex())?.Pool.Add(peers);
             if (Settings.EnableDHT) dhtBoot.ResolveInBackground();
             if (!CanForgetPieces) log("внимание: внутренности MonoTorrent не найдены — вытесненные куски не перекачаются");
+            // ut_holepunch (BEP 55) и свой ut_pex — до первого соединения (Holepunch.cs, PeerExchange.cs)
+            HolePunch.Register();
+            PeerExchange.Register();
+            if (!HolePunch.Supported) log("внимание: внутренности MonoTorrent не найдены — без ut_holepunch");
+            if (!PeerExchange.Supported) log("внимание: внутренности MonoTorrent не найдены — PEX штатный MonoTorrent");
             try
             {
                 engine = CreateEngine();
+                HolePunch.Attach(engine, utp, () => Settings.PeersListenPort, log);
+                // Адреса из PEX — и в запас торрента: MonoTorrent берёт их, только пока есть место
+                PeerExchange.Attach(engine, (m, peers) => Get(m.InfoHashes.V1OrV2.ToHex())?.Pool.Add(peers));
                 engine.Dht.StateChanged += (s, a) => log("DHT: " + engine.Dht.State + ", узлов " + engine.Dht.NodeCount);
                 log("движок готов: порт пиров " + Settings.PeersListenPort + ", кэш " + (Settings.CacheSize >> 20) + " МБ, в базе " + entries.Count);
             }
@@ -300,12 +308,15 @@ namespace TorrStreamTorrServer
         static readonly PropertyInfo PeerConnectionProp =
             typeof(PeerId).GetProperty("Connection", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        /// <summary>uTP-соединение пира или null — TCP (соединение у PeerId закрытое — через отражение)</summary>
-        static UtpPeerConnection PeerUtp(PeerId p)
+        /// <summary>uTP-соединение пира или null — TCP</summary>
+        static UtpPeerConnection PeerUtp(PeerId p) => HolePunch.Utp(p);
+
+        /// <summary>Подключились пробивкой NAT (BEP 55): исходящее по connect или встречный SYN</summary>
+        static bool PeerPunched(PeerId p)
         {
             object c = null;
             try { c = PeerConnectionProp?.GetValue(p); } catch { }
-            return c as UtpPeerConnection ?? (c as HybridPeerConnection)?.Utp;
+            return (c as HybridPeerConnection)?.Punched == true || (c as TrackedPeerConnection)?.Punched == true;
         }
 
         TorrentSettings TorrentSettingsFor()
@@ -317,7 +328,8 @@ namespace TorrStreamTorrServer
                 MaximumConnections = Settings.ConnectionsLimit + PeerRotation.Headroom(Settings.ConnectionsLimit),
                 UploadSlots = 4,
                 AllowDht = Settings.EnableDHT,
-                AllowPeerExchange = true,
+                // PEX свой (PeerExchange.cs): у MonoTorrent он шлёт не тот номер ut_pex и не тем
+                AllowPeerExchange = !PeerExchange.Supported,
                 AllowInitialSeeding = false,
                 CreateContainingDirectory = true,
             }.ToSettings();
@@ -1493,6 +1505,13 @@ namespace TorrStreamTorrServer
                 foreach (var kv in d.Trackers) w.Prop(kv.Key, kv.Value);
                 w.EndObj();
             }
+            // ut_holepunch — счётчики на весь процесс
+            w.Key("HolePunch").Obj().Prop("Supported", HolePunch.Supported)
+                .Prop("RendezvousSent", HolePunch.RendezvousSent).Prop("ConnectReceived", HolePunch.ConnectReceived)
+                .Prop("Punched", HolePunch.Punched).Prop("Relayed", HolePunch.Relayed)
+                .Prop("RelayFailed", HolePunch.RelayFailed).Prop("ErrorsReceived", HolePunch.ErrorsReceived).EndObj();
+            w.Key("Pex").Obj().Prop("Own", PeerExchange.Supported)
+                .Prop("Sent", PeerExchange.MessagesSent).Prop("Received", PeerExchange.MessagesReceived).EndObj();
             if (m != null)
             {
                 w.Prop("State", m.State.ToString());
@@ -1518,6 +1537,7 @@ namespace TorrStreamTorrServer
                                 .Prop("Choking", p.IsChoking).Prop("Interested", p.AmInterested)
                                 .Prop("Encryption", p.EncryptionType.ToString())
                                 .Prop("Transport", PeerUtp(p) != null ? "uTP" : "TCP")
+                                .Prop("Holepunch", PeerPunched(p))
                                 .Prop("Incoming", p.ConnectionDirection == Direction.Incoming);
                             var utpConn = PeerUtp(p);
                             if (utpConn != null)
@@ -1552,7 +1572,8 @@ namespace TorrStreamTorrServer
             return plus > 0 ? v.Substring(0, plus) : v;
         }
 
-        public void WriteVersion(JsonWriter w, int httpPort)
+        /// <summary>collect — сначала полная сборка мусора: что останется в gc_mb, то и правда занято</summary>
+        public void WriteVersion(JsonWriter w, int httpPort, bool collect = false)
         {
             int active;
             long filled = 0;
@@ -1561,14 +1582,41 @@ namespace TorrStreamTorrServer
                 active = entries.Values.Count(e => e.Manager != null);
                 foreach (var e in entries.Values) if (e.Store != null) filled += e.Store.Filled;
             }
+            long gcBefore = GC.GetTotalMemory(false);
+            if (collect)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
+            long gc = GC.GetTotalMemory(false);
+            // Память всего процесса (RSS): куча .NET, сам рантайм, код, стеки потоков, сокеты
+            long rss = -1, peak = -1;
+            int threads = -1;
+            try
+            {
+                using (var p = System.Diagnostics.Process.GetCurrentProcess())
+                {
+                    rss = p.WorkingSet64;
+                    try { peak = p.PeakWorkingSet64; } catch { }
+                    // Mono на части платформ список потоков не отдаёт — без него, но с RSS
+                    try { threads = p.Threads.Count; } catch { }
+                }
+            }
+            catch { }
             w.Obj().Prop("name", "MonoServer").Prop("service", ServiceVersion).Prop("echo", EchoVersion)
                 .Prop("engine", "MonoTorrent " + EngineVersion())
                 .Prop("runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription)
                 .Prop("arch", System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString())
                 .Prop("port", httpPort).Prop("peers_port", Settings.PeersListenPort)
                 .Prop("cache_mb", Settings.CacheSize >> 20).Prop("memory_mb", filled >> 20)
-                .Prop("gc_mb", GC.GetTotalMemory(false) >> 20)
-                .Prop("torrents", entries.Count).Prop("active", active)
+                // Куча .NET: кэш кусков (byte[]) плюс всё прочее, вместе с ещё не собранным мусором
+                .Prop("gc_mb", gc >> 20)
+                .Prop("rss_mb", rss >= 0 ? rss >> 20 : -1).Prop("peak_rss_mb", peak >= 0 ? peak >> 20 : -1)
+                .Prop("threads", threads);
+            w.Key("gc_count").Arr().Val(GC.CollectionCount(0)).Val(GC.CollectionCount(1)).Val(GC.CollectionCount(2)).EndArr();
+            if (collect) w.Prop("gc_freed_mb", (gcBefore - gc) >> 20);
+            w.Prop("torrents", entries.Count).Prop("active", active)
                 .Prop("evict", CanForgetPieces)
                 .Prop("dht", engine != null ? engine.Dht.State + ", узлов " + engine.Dht.NodeCount : "")
                 .Prop("trackers", trackers != null ? trackers.Current.Length + " (" + trackers.Source + (trackers.UpdatedAt.HasValue ? ", " + trackers.UpdatedAt.Value.ToString("dd.MM HH:mm") : "") + ")" : "")

@@ -309,6 +309,20 @@ namespace TorrStreamTorrServer
             }
         }
 
+        /// <summary>
+        /// Торрент закрыт — забыть его адреса: запись держит TorrentManager и соединение
+        /// источника, а чистилась книга только при переполнении. Сколько забыто
+        /// </summary>
+        internal static int Forget(Func<object, bool> closedManager)
+        {
+            lock (sync)
+            {
+                var gone = pexBook.Where(kv => closedManager(kv.Value.Manager)).Select(kv => kv.Key).ToList();
+                foreach (var k in gone) pexBook.Remove(k);
+                return gone.Count;
+            }
+        }
+
         // ---------- Инициатор ----------
 
         /// <summary>

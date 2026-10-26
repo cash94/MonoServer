@@ -978,26 +978,84 @@ namespace TorrStreamTorrServer
                     await engine.RemoveAsync(m, RemoveMode.KeepAllData).ConfigureAwait(false);
                 }
                 catch (Exception ex) { log(e.Hash + ": закрытие — " + ex.Message); }
+                ForgetClosed(m);
                 log(e.Hash + ": закрыт");
             }
             try { if (e.SaveDir != null && Directory.Exists(e.SaveDir)) Directory.Delete(e.SaveDir, true); } catch { }
             // Кэш закрытого торрента — мусор; отдать память ОС (TrimMemory из CloseIdle)
-            if (store != null || m != null) Interlocked.Exchange(ref trimAtMs, Now() + TrimDelayMs);
+            if (store != null || m != null)
+            {
+                Interlocked.Exchange(ref trimAtMs, Now() + TrimDelayMs);
+                Interlocked.Exchange(ref lateTrimAtMs, Now() + LateTrimDelayMs);
+            }
             return true;
         }
 
         // Сборка мусора после закрытия торрента: через TrimDelayMs после последнего
         // закрытия (несколько подряд — одна сборка). Без неё массивы кэша лежали
         // мусором до случайной полной сборки (в простое её нет — куча 100+ МБ при
-        // живых 4), а память процесс не отдавал: на VPS 157 МБ против 129 со сборкой
-        const long TrimDelayMs = 10000;
-        long trimAtMs = -1;
+        // живых 4), а память процесс не отдавал: на VPS 157 МБ против 129 со сборкой.
+        // Вторая — через LateTrimDelayMs: сам TorrentManager (пиры, соединения, uTP)
+        // после закрытия ещё держат анонсы «stopped» на UDP-трекеры — MonoTorrent
+        // ждёт ответа до 45 с на connect и столько же на announce (RetryDelay × 3).
+        // Первая сборка его не застаёт, и без второй процесс рос от торрента к
+        // торренту: 167 → 170 → 179 → 192 → 203 МБ, куча после сборки 5 → 15 МБ
+        const long TrimDelayMs = 10000, LateTrimDelayMs = 120000;
+        long trimAtMs = -1, lateTrimAtMs = -1;
 
         void TrimMemory()
         {
             long before = ProcessRssMb();
+            ForgetClosed(null);
             CollectGarbage();
             log("память после закрытия торрента: процесс " + before + " → " + ProcessRssMb() + " МБ, куча .NET " + (GC.GetTotalMemory(false) >> 20) + " МБ");
+        }
+
+        // DiskManager.IncrementalHashes (внутреннее) — пошаговое хэширование кусков по
+        // ключу (TorrentManager, кусок). Запись появляется с первым блоком куска и
+        // уходит, только когда кусок дохэширован; недокачанные при закрытии торрента
+        // или перемотке остаются навсегда — и с ними весь TorrentManager: пиры,
+        // соединения, uTP. Так на VPS после каждого закрытого торрента живая куча
+        // росла на 2–10 МБ (4 → 8 → 16 → 18 → 20 → 37) и не уходила никогда
+        static readonly FieldInfo IncrementalHashesField =
+            typeof(DiskManager).GetField("IncrementalHashes", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        /// <summary>
+        /// Забыть закрытые торренты там, где MonoTorrent и мы сами держат их после
+        /// закрытия: closed — только он, null — все, кого сейчас нет среди открытых
+        /// </summary>
+        void ForgetClosed(TorrentManager closed)
+        {
+            HashSet<TorrentManager> open;
+            lock (sync) open = new HashSet<TorrentManager>(entries.Values.Select(x => x.Manager).Where(x => x != null));
+            Func<object, bool> dead = x => x is TorrentManager t && (closed != null ? t == closed : !open.Contains(t));
+            int hashes = 0;
+            try
+            {
+                var locked = engine == null ? null : IncrementalHashesField?.GetValue(engine.DiskManager);
+                var enter = locked?.GetType().GetMethod("Enter", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (enter != null)
+                {
+                    var args = new object[1];
+                    // SpinLocked.Enter — под его замком: пишет в словарь поток дискового ввода-вывода
+                    var releaser = enter.Invoke(locked, args) as IDisposable;
+                    try
+                    {
+                        if (args[0] is System.Collections.IDictionary d)
+                        {
+                            var gone = new List<object>();
+                            foreach (var key in d.Keys)
+                                if (dead(key.GetType().GetField("Item1")?.GetValue(key))) gone.Add(key);
+                            foreach (var key in gone) d.Remove(key);
+                            hashes = gone.Count;
+                        }
+                    }
+                    finally { releaser?.Dispose(); }
+                }
+            }
+            catch (Exception ex) { log("хэши кусков закрытых торрентов: " + ex.Message); }
+            int pex = HolePunch.Forget(dead);
+            if (hashes > 0 || pex > 0) log("забыто от закрытых торрентов: недохэшированных кусков " + hashes + ", адресов PEX " + pex);
         }
 
         static long ProcessRssMb()
@@ -1053,9 +1111,15 @@ namespace TorrStreamTorrServer
                         lock (sync) if (!e.InDb && e.Manager == null && e.Activation == null) entries.Remove(e.Hash);
                 });
             }
-            long trimAt = Interlocked.Read(ref trimAtMs);
-            if (trimAt >= 0 && now >= trimAt && Interlocked.CompareExchange(ref trimAtMs, -1, trimAt) == trimAt)
+            if (Due(ref trimAtMs, now) | Due(ref lateTrimAtMs, now))
                 Task.Run(() => { try { TrimMemory(); } catch (Exception ex) { log("сборка мусора: " + ex.Message); } });
+        }
+
+        /// <summary>Срок at наступил — снять его (один раз, даже если CloseIdle вызван дважды)</summary>
+        static bool Due(ref long at, long now)
+        {
+            long v = Interlocked.Read(ref at);
+            return v >= 0 && now >= v && Interlocked.CompareExchange(ref at, -1, v) == v;
         }
 
         // Есть что качать: идёт предзагрузка или в окне главного читателя есть

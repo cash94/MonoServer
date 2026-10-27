@@ -12,7 +12,7 @@
   Профиль «tv» и привилегии службы в корневом config.xml добавляет build.py.
 -->
 <widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
-        id="http://torrstream.online/tizen-torrserver" version="1.0.24" viewmodes="maximized">
+        id="http://torrstream.online/tizen-torrserver" version="1.0.25" viewmodes="maximized">
     <tizen:application id="TorrServr1.TorrServer" package="TorrServr1" required_version="2.3"/>
     <tizen:profile name="tv"/>
     <name>MonoServer</name>

@@ -9,10 +9,14 @@
 //   GET  /download/<МБ>                     — нули для замера скорости
 //   GET  /version, /log[?after=N]           — служебное: состояние, журнал
 //   GET  /                                  — страница отладки (WebPage.cs, web/index.html)
+//   /api/…                                  — MonoServer: вход, пользователи, трафик,
+//                                             балансировка (AdminApi.cs)
 // Файлы — с Range (перемотка в AVPlay), HEAD, keep-alive. CORS — для всех:
 // страница TorrStream лежит в пакете приложения (file://) и шлёт preflight;
 // Chrome 94+ спрашивает и про Private Network Access.
-// Пароля нет, как у TorrServer по умолчанию: служба слушает домашнюю сеть.
+// Вход (Accounts.cs): веб-интерфейс — только admin; потоки и API торрентов —
+// со входом, если он включён («Доступ»), иначе как у TorrServer по умолчанию —
+// без пароля, со списком торрентов admin. Кто спрашивает — Caller (Auth.cs).
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -24,25 +28,33 @@ using System.Threading;
 
 namespace TorrStreamTorrServer
 {
-    public class HttpApi
+    public partial class HttpApi
     {
         const int MaxConnections = 64;
         const int ChunkSize = 64 * 1024;
         const int InfoTimeoutMs = 60000;
 
         readonly TorrEngine engine;
+        readonly Accounts accounts;
         readonly int port;
         readonly Action<string> log;
         readonly LogRing journal;
+        readonly string localKey;
+        public readonly StreamRegistry Streams = new StreamRegistry();
+        public readonly Balancer Balancer;
         TcpListener listener;
         int connections;
 
-        public HttpApi(TorrEngine engine, int port, Action<string> log, LogRing journal)
+        /// <summary>localKey — ключ приложения на том же устройстве (local.key в данных службы): с ним — как admin</summary>
+        public HttpApi(TorrEngine engine, Accounts accounts, int port, Action<string> log, LogRing journal, string localKey)
         {
             this.engine = engine;
+            this.accounts = accounts;
             this.port = port;
             this.log = log ?? (_ => { });
             this.journal = journal;
+            this.localKey = localKey;
+            Balancer = new Balancer(accounts, Streams, this.log);
         }
 
         public int Port => port;
@@ -58,6 +70,7 @@ namespace TorrStreamTorrServer
         public void Stop()
         {
             try { listener?.Stop(); } catch { }
+            Balancer.Stop();
         }
 
         void AcceptLoop()
@@ -90,6 +103,7 @@ namespace TorrStreamTorrServer
             public Dictionary<string, string> Query = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, string> Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             public byte[] Body = new byte[0];
+            public Caller Caller;
             public string Header(string k) { return Headers.TryGetValue(k, out var v) ? v : null; }
             public bool Has(string k) { return Query.ContainsKey(k); }
             public string Q(string k) { return Query.TryGetValue(k, out var v) ? v : null; }
@@ -198,6 +212,7 @@ namespace TorrStreamTorrServer
             string path = req.Path.TrimEnd('/');
             bool file = path.StartsWith("/play/") || ((path == "/stream" || path.StartsWith("/stream/")) && !req.Has("stat") && !req.Has("m3u") && !req.Has("preload"));
             bool polling = req.Method == "OPTIONS" || path == "/echo" || path == "/version" || path == "/log" || path == "/cache" || path == "" || path == "/favicon.ico" ||
+                (path.StartsWith("/api/") && req.Method == "GET") ||
                 (path == "/torrents" && (req.BodyText.Contains("\"list\"") || req.BodyText.Contains("\"get\"")));
             if (file || (polling && ms < 1000)) return;
             string what = req.Method + " " + path;
@@ -208,7 +223,7 @@ namespace TorrStreamTorrServer
                 int at = body.IndexOf("\"action\"", StringComparison.Ordinal);
                 if (at >= 0) what += " " + body.Substring(at, Math.Min(24, body.Length - at));
             }
-            log("HTTP " + what + " — " + (ms / 1000.0).ToString("0.0") + " с, " + Remote(client));
+            log("HTTP " + what + " — " + (ms / 1000.0).ToString("0.0") + " с, " + Remote(client) + (req.Caller != null && req.Caller.User != null ? " (" + req.Caller.Who + ")" : ""));
         }
 
         static Request ReadRequest(Input input)
@@ -261,7 +276,7 @@ namespace TorrStreamTorrServer
             sb.Append("Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n");
             string want = req.Header("Access-Control-Request-Headers");
             sb.Append("Access-Control-Allow-Headers: ").Append(string.IsNullOrEmpty(want) ? "Authorization, Content-Type, Range, Accept" : want).Append("\r\n");
-            sb.Append("Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges\r\n");
+            sb.Append("Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges, X-MonoServer\r\n");
             if (req.Header("Access-Control-Request-Private-Network") != null)
                 sb.Append("Access-Control-Allow-Private-Network: true\r\n");
             sb.Append("Access-Control-Max-Age: 600\r\n");
@@ -276,7 +291,12 @@ namespace TorrStreamTorrServer
                 case 204: return "No Content";
                 case 206: return "Partial Content";
                 case 400: return "Bad Request";
+                case 302: return "Found";
+                case 401: return "Unauthorized";
+                case 403: return "Forbidden";
                 case 404: return "Not Found";
+                case 409: return "Conflict";
+                case 429: return "Too Many Requests";
                 case 416: return "Range Not Satisfiable";
                 case 500: return "Internal Server Error";
                 case 503: return "Service Unavailable";
@@ -292,6 +312,8 @@ namespace TorrStreamTorrServer
             if (length >= 0) sb.Append("Content-Length: ").Append(length).Append("\r\n");
             sb.Append(Cors(req));
             sb.Append("Cache-Control: no-cache\r\n");
+            // По нему TorrStream отличает MonoServer от TorrServer, не спрашивая /api/info
+            sb.Append("X-MonoServer: ").Append(TorrEngine.ServiceVersion).Append("\r\n");
             sb.Append("Connection: ").Append(keep ? "keep-alive" : "close").Append("\r\n");
             if (extra != null) sb.Append(extra);
             sb.Append("\r\n");
@@ -320,15 +342,23 @@ namespace TorrStreamTorrServer
             try
             {
                 if (path == "/echo") return SendText(s, req, 200, TorrEngine.EchoVersion);
+                if (path == "/favicon.ico") { WriteHead(s, req, 204, null, 0, null, req.KeepAlive); return true; }
+                var c = req.Caller = Identify(client, req);
+                if (path.StartsWith("/api/")) return Api(client, s, req, c, path);
                 if (path == "/version")
                 {
+                    // Без входа — коротко: имя и версия (страница Tizen, проверка «это MonoServer»)
                     var w = new JsonWriter();
                     // ?gc — сначала собрать мусор (кнопка на странице отладки, проверка утечек)
-                    engine.WriteVersion(w, port, req.Has("gc"));
+                    engine.WriteVersion(w, port, c.Admin && req.Has("gc"), !c.Admin);
                     return SendJson(s, req, w.ToString());
                 }
+                // Веб-интерфейс — только admin; без входа на «/» — страница входа
+                if (path == "" || path == "/index.html" || path == "/login")
+                    return Send(s, req, 200, "text/html; charset=utf-8", c.Admin && path != "/login" ? WebPage.Html : WebPage.Login);
                 if (path == "/log")
                 {
+                    if (!c.Admin) return Unauthorized(s, req, c);
                     // ?after=N — страница отладки: строки после N-й, JSON
                     if (req.Has("after") && journal != null)
                     {
@@ -337,14 +367,16 @@ namespace TorrStreamTorrServer
                     }
                     return SendText(s, req, 200, journal != null ? journal.Text() : "");
                 }
-                if (path == "" || path == "/index.html") return Send(s, req, 200, "text/html; charset=utf-8", WebPage.Html);
-                if (path == "/favicon.ico") { WriteHead(s, req, 204, null, 0, null, req.KeepAlive); return true; }
-                if (path == "/torrents") return Torrents(s, req);
-                if (path == "/stream" || path.StartsWith("/stream/")) return StreamRoute(client, s, req);
-                if (path.StartsWith("/play/")) return Play(client, s, req, path);
-                if (path == "/cache") return Cache(s, req);
-                if (path == "/settings") return SettingsRoute(s, req);
-                if (path.StartsWith("/download/")) return Download(s, req, path);
+                // API TorrServer и потоки: вошедший, зритель мастера (только потоки) или без входа, где можно
+                bool streamRoute = path == "/stream" || path.StartsWith("/stream/") || path.StartsWith("/play/");
+                if (c.User == null && !(c.Remote != null && streamRoute) && !c.Anonymous) return Unauthorized(s, req, c);
+                if (c.ErrorCode != 0 && c.User == null && c.Remote == null) return Unauthorized(s, req, c);
+                if (path == "/torrents") return Torrents(s, req, c);
+                if (path == "/stream" || path.StartsWith("/stream/")) return StreamRoute(client, s, req, c);
+                if (path.StartsWith("/play/")) return Play(client, s, req, c, path);
+                if (path == "/cache") return Cache(s, req, c);
+                if (path == "/settings") return SettingsRoute(s, req, c);
+                if (path.StartsWith("/download/")) return Download(s, req, c, path);
                 if (path == "/viewed") return SendJson(s, req, "[]");
                 if (path == "/shutdown") return SendText(s, req, 200, "");
                 return SendText(s, req, 404, "not found");
@@ -366,48 +398,179 @@ namespace TorrStreamTorrServer
             catch (FormatException e) { throw new ArgumentException(e.Message); }
         }
 
-        string Status(TorrEntry e)
+        // ==================== торренты по пользователям ====================
+
+        // Открытые без «в базу» — чьи они (TempKey), пока торрент открыт: в списке
+        // TorrServer такие видны до закрытия, но другим пользователям — нет
+        readonly Dictionary<string, HashSet<string>> temp = new Dictionary<string, HashSet<string>>();
+
+        string TempKey(Caller c)
+        {
+            if (c.Remote != null) return "r:" + c.Remote.ToLowerInvariant();
+            var owner = ListOwner(c);
+            return owner != null ? "u:" + owner.Login.ToLowerInvariant() : "?";
+        }
+
+        void MarkTemp(Caller c, string hash)
+        {
+            lock (temp)
+            {
+                if (!temp.TryGetValue(hash, out var set)) temp[hash] = set = new HashSet<string>(StringComparer.Ordinal);
+                set.Add(TempKey(c));
+            }
+        }
+
+        void UnmarkTemp(Caller c, string hash)
+        {
+            lock (temp) if (temp.TryGetValue(hash, out var set) && set.Remove(TempKey(c)) && set.Count == 0) temp.Remove(hash);
+        }
+
+        bool IsTemp(Caller c, TorrEntry e)
+        {
+            lock (temp)
+            {
+                if (!temp.TryGetValue(e.Hash, out var set)) return false;
+                // Закрылся — больше не «открытый без базы»
+                if (!e.Active) { temp.Remove(e.Hash); return false; }
+                return set.Contains(TempKey(c));
+            }
+        }
+
+        bool Visible(Caller c, TorrEntry e)
+        {
+            return c.Admin || accounts.Own(ListOwner(c), e.Hash) != null || IsTemp(c, e);
+        }
+
+        string Status(Caller c, TorrEntry e)
         {
             var w = new JsonWriter();
-            engine.WriteStatus(w, e);
+            WriteStatus(w, c, e, null);
             return w.ToString();
         }
 
-        bool Torrents(Stream s, Request req)
+        void WriteStatus(JsonWriter w, Caller c, TorrEntry e, List<string> owners)
+        {
+            engine.WriteStatus(w, e, accounts.Own(ListOwner(c), e.Hash), owners);
+        }
+
+        /// <summary>
+        /// Торрент убран из списка пользователя: больше ни у кого его нет — из
+        /// движка; смотрит кто-то другой — только из базы движка, закроется сам
+        /// </summary>
+        void Release(string hash, string viewer)
+        {
+            if (accounts.Owners(hash).Count > 0) return;
+            bool othersTemp;
+            lock (temp) othersTemp = temp.TryGetValue(hash, out var set) && set.Count > 0;
+            if (Streams.OthersOn(hash, viewer) || othersTemp) engine.Unsave(hash);
+            else engine.RemoveAsync(hash).GetAwaiter().GetResult();
+        }
+
+        /// <summary>Убрать торрент из списка пользователя (null — у всех) и, если не нужен, из движка</summary>
+        public void RemoveTorrent(string hash, User from, string viewer)
+        {
+            if (string.IsNullOrEmpty(hash)) return;
+            hash = hash.Trim().ToLowerInvariant();
+            if (from != null) accounts.Forget(from, hash);
+            else
+            {
+                foreach (var u in accounts.Users()) accounts.Forget(u, hash);
+                lock (temp) temp.Remove(hash);
+                engine.RemoveAsync(hash).GetAwaiter().GetResult();
+                return;
+            }
+            Release(hash, viewer);
+        }
+
+        bool Torrents(Stream s, Request req, Caller c)
         {
             var o = Body(req);
             string action = o.Str("action") ?? "";
-            string hash = o.Str("hash");
+            string hash = (o.Str("hash") ?? "").Trim().ToLowerInvariant();
+            var owner = ListOwner(c);
             switch (action)
             {
                 case "add":
                 {
-                    var e = engine.AddAsync(o.Str("link"), o.Str("title"), o.Str("poster"), o.Str("data"), o.Str("category"),
-                        o.Bool("save_to_db") ?? false).GetAwaiter().GetResult();
-                    return SendJson(s, req, Status(e));
+                    bool save = (o.Bool("save_to_db") ?? false) && owner != null;
+                    long tmdbId = TorrMeta.TmdbId(o.TryGetValue("tmdb_id", out var tv) ? tv : null);
+                    int[] seasons = TorrMeta.Seasons(o.TryGetValue("seasons", out var sv) ? sv : null);
+                    var e = engine.AddAsync(o.Str("link"), o.Str("title"), o.Str("poster"), o.Str("data"), o.Str("category"), save).GetAwaiter().GetResult();
+                    engine.SetTmdb(e.Hash, tmdbId, seasons);
+                    if (save || accounts.Own(owner, e.Hash) != null) accounts.Keep(owner, e, o.Str("title"), o.Str("data"), o.Str("category"), tmdbId, seasons);
+                    else MarkTemp(c, e.Hash);
+                    return SendJson(s, req, Status(c, e));
                 }
                 case "get":
                 {
                     var e = engine.Get(hash);
-                    if (e == null) return SendText(s, req, 404, "torrent not found");
-                    return SendJson(s, req, Status(e));
+                    if (e == null || !Visible(c, e)) return SendText(s, req, 404, "torrent not found");
+                    return SendJson(s, req, Status(c, e));
                 }
                 case "set":
-                    engine.SetMeta(hash, o.Str("title"), o.Str("poster"), o.Str("data"), o.Str("category"));
+                {
+                    var e = engine.Get(hash);
+                    if (e == null || !Visible(c, e)) return SendText(s, req, 404, "torrent not found");
+                    // В списке пользователя — его название, data и TMDB; постер общий (проверяет движок)
+                    long tmdbId = TorrMeta.TmdbId(o.TryGetValue("tmdb_id", out var tv) ? tv : null);
+                    int[] seasons = TorrMeta.Seasons(o.TryGetValue("seasons", out var sv) ? sv : null);
+                    if (accounts.SetMeta(owner, hash, o.Str("title"), o.Str("data"), o.Str("category"), tmdbId, seasons))
+                        engine.SetMeta(hash, null, o.Str("poster"), null, null);
+                    else
+                    {
+                        engine.SetMeta(hash, o.Str("title"), o.Str("poster"), o.Str("data"), o.Str("category"));
+                        engine.SetTmdb(hash, tmdbId, seasons);
+                    }
                     return SendText(s, req, 200, "");
+                }
                 case "rem":
-                    engine.RemoveAsync(hash).GetAwaiter().GetResult();
+                {
+                    var e = engine.Get(hash);
+                    if (e == null) return SendText(s, req, 200, "");
+                    UnmarkTemp(c, hash);
+                    // Админ удаляет чужой торрент (его не было в своём списке) — у всех
+                    if (c.Admin && accounts.Own(owner, hash) == null) RemoveTorrent(hash, null, c.Viewer);
+                    else if (accounts.Own(owner, hash) != null) RemoveTorrent(hash, owner, c.Viewer);
+                    else if (Visible(c, e) || !e.InDb) Release(hash, c.Viewer);
                     return SendText(s, req, 200, "");
+                }
                 case "drop":
-                    engine.DropAsync(hash).GetAwaiter().GetResult();
+                {
+                    var e = engine.Get(hash);
+                    if (e == null) return SendText(s, req, 200, "");
+                    UnmarkTemp(c, hash);
+                    // Смотрит кто-то ещё — не закрываем у него из-под ног
+                    if (!Streams.OthersOn(hash, c.Viewer)) engine.DropAsync(hash).GetAwaiter().GetResult();
                     return SendText(s, req, 200, "");
+                }
                 case "wipe":
-                    engine.WipeAsync().GetAwaiter().GetResult();
+                    // Только свой список: у админа тоже — чужие удаляются в веб-интерфейсе
+                    if (owner != null)
+                        foreach (var t in accounts.OwnList(owner)) RemoveTorrent(t.Hash, owner, c.Viewer);
                     return SendText(s, req, 200, "");
                 case "list":
                 {
                     var w = new JsonWriter().Arr();
-                    foreach (var e in engine.List()) engine.WriteStatus(w, e);
+                    if (c.Admin)
+                    {
+                        var owners = accounts.OwnersAll();
+                        foreach (var e in engine.List())
+                            WriteStatus(w, c, e, owners.TryGetValue(e.Hash, out var l) ? l : new List<string>());
+                    }
+                    else
+                    {
+                        var shown = new List<KeyValuePair<long, TorrEntry>>();
+                        var seen = new HashSet<string>();
+                        if (owner != null)
+                            foreach (var t in accounts.OwnList(owner))
+                            {
+                                var e = engine.Get(t.Hash) ?? engine.Remember(t);
+                                if (e != null && seen.Add(e.Hash)) shown.Add(new KeyValuePair<long, TorrEntry>(t.Timestamp, e));
+                            }
+                        foreach (var e in engine.List())
+                            if (!seen.Contains(e.Hash) && IsTemp(c, e) && seen.Add(e.Hash)) shown.Add(new KeyValuePair<long, TorrEntry>(e.Timestamp, e));
+                        foreach (var kv in shown.OrderByDescending(x => x.Key)) WriteStatus(w, c, kv.Value, null);
+                    }
                     return SendJson(s, req, w.EndArr().ToString());
                 }
                 default:
@@ -415,20 +578,27 @@ namespace TorrStreamTorrServer
             }
         }
 
-        bool Cache(Stream s, Request req)
+        bool Cache(Stream s, Request req, Caller c)
         {
             var o = Body(req);
             var e = engine.Get(o.Str("hash"));
-            if (e == null) return SendJson(s, req, "{}");
+            if (e == null || !Visible(c, e)) return SendJson(s, req, "{}");
             var w = new JsonWriter();
             engine.WriteCache(w, e, o.Bool("peers") ?? false);
             return SendJson(s, req, w.ToString());
         }
 
-        bool SettingsRoute(Stream s, Request req)
+        bool SettingsRoute(Stream s, Request req, Caller c)
         {
             var o = Body(req);
             string action = o.Str("action") ?? "get";
+            // Настройки общие на сервер: менять — админ (и без входа, где вход выключен, — как раньше)
+            if ((action == "set" || action == "def") && !c.Admin && !(c.Anonymous && c.User == null))
+            {
+                c.Error = "настройки сервера меняет только администратор";
+                c.ErrorCode = 403;
+                return Unauthorized(s, req, c);
+            }
             if (action == "set")
             {
                 engine.ApplySettings(o.TryGetValue("sets", out var v) ? v as Dictionary<string, object> : null);
@@ -442,7 +612,7 @@ namespace TorrStreamTorrServer
             return SendJson(s, req, engine.Settings.ToJson());
         }
 
-        bool Download(Stream s, Request req, string path)
+        bool Download(Stream s, Request req, Caller c, string path)
         {
             if (!int.TryParse(path.Substring("/download/".Length), out int mb) || mb <= 0) mb = 1;
             mb = Math.Min(mb, 1024);
@@ -450,29 +620,51 @@ namespace TorrStreamTorrServer
             WriteHead(s, req, 200, "application/octet-stream", total, null, req.KeepAlive);
             if (req.Method == "HEAD") return true;
             var zero = new byte[ChunkSize];
-            for (long left = total; left > 0; left -= ChunkSize)
-                s.Write(zero, 0, (int)Math.Min(ChunkSize, left));
+            long sent = 0;
+            try
+            {
+                for (long left = total; left > 0; left -= ChunkSize)
+                {
+                    int n = (int)Math.Min(ChunkSize, left);
+                    s.Write(zero, 0, n);
+                    sent += n;
+                }
+            }
+            finally { accounts.AddHttp(c.Login, c.Remote, sent); }
             return true;
         }
 
         // /stream?link=…&index=N&play|stat|m3u|preload — как у TorrServer
-        bool StreamRoute(TcpClient client, Stream s, Request req)
+        bool StreamRoute(TcpClient client, Stream s, Request req, Caller c)
         {
             string link = req.Q("link");
             if (string.IsNullOrEmpty(link)) return SendText(s, req, 400, "link should not be empty");
-            var e = engine.AddAsync(link, req.Q("title"), req.Q("poster"), null, null, req.Has("save")).GetAwaiter().GetResult();
+            // Мастер: здесь мест нет — на узел, пока торрент здесь даже не открыт
+            if (!req.Has("stat") && !req.Has("m3u"))
+            {
+                string to = Balancer.Redirect(c, NodePath(req, req.Path, link));
+                if (to != null) return Redirect(s, req, to);
+            }
+            var owner = ListOwner(c);
+            bool save = req.Has("save") && owner != null;
+            var e = engine.AddAsync(link, req.Q("title"), req.Q("poster"), null, null, save).GetAwaiter().GetResult();
+            long tmdbId = TorrMeta.TmdbId(req.Q("tmdb_id"));
+            int[] seasons = TorrMeta.Seasons(req.Q("seasons"));
+            engine.SetTmdb(e.Hash, tmdbId, seasons);
+            if (save || accounts.Own(owner, e.Hash) != null) accounts.Keep(owner, e, req.Q("title"), null, null, tmdbId, seasons);
+            else MarkTemp(c, e.Hash);
             bool hasInfo = engine.WaitInfoAsync(e, InfoTimeoutMs).GetAwaiter().GetResult();
 
-            if (req.Has("stat")) return SendJson(s, req, Status(e));
+            if (req.Has("stat")) return SendJson(s, req, Status(c, e));
             if (!hasInfo) return SendText(s, req, 404, "torrent info timeout");
-            if (req.Has("m3u")) return Send(s, req, 200, "audio/x-mpegurl; charset=utf-8", M3u(req, e));
+            if (req.Has("m3u")) return Send(s, req, 200, "audio/x-mpegurl; charset=utf-8", M3u(req, c, e));
 
             int index;
             if (!int.TryParse(req.Q("index"), out index))
             {
                 // Без номера: единственный файл — он, иначе список
                 var files = e.Files.Where(f => f.File != null).ToList();
-                if (files.Count != 1) return Send(s, req, 200, "audio/x-mpegurl; charset=utf-8", M3u(req, e));
+                if (files.Count != 1) return Send(s, req, 200, "audio/x-mpegurl; charset=utf-8", M3u(req, c, e));
                 index = files[0].Id;
             }
             var stat = engine.FileById(e, index);
@@ -484,20 +676,24 @@ namespace TorrStreamTorrServer
                 log(e.Hash + ": предзагрузка файла " + stat.Id + ", " + Remote(client));
                 bool ok = engine.Preload(e, stat, () => Gone(client));
                 log(e.Hash + ": предзагрузка " + (ok ? "готова" : "прервана") + " за " + (t.ElapsedMilliseconds / 1000.0).ToString("0.0") + " с, " + Mb(e.PreloadedBytes) + " из " + Mb(e.PreloadSize));
-                return SendJson(s, req, Status(e));
+                return SendJson(s, req, Status(c, e));
             }
-            return ServeFile(client, s, req, e, stat);
+            return ServeFile(client, s, req, c, e, stat);
         }
 
         // /play/<хэш>/<номер>
-        bool Play(TcpClient client, Stream s, Request req, string path)
+        bool Play(TcpClient client, Stream s, Request req, Caller c, string path)
         {
             var parts = path.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 3) return SendText(s, req, 400, "use /play/hash/index");
-            string hash = parts[1];
+            string hash = parts[1].ToLowerInvariant();
+            // На узел — /stream с полной ссылкой: торрента в его базе нет, а голый хэш — только DHT
+            string to = Balancer.Redirect(c, NodePath(req, "/stream", hash, parts[2]));
+            if (to != null) return Redirect(s, req, to);
             var e = engine.OpenAsync(hash).GetAwaiter().GetResult();
             if (e == null)
                 e = engine.AddAsync(hash, null, null, null, null, false).GetAwaiter().GetResult();
+            if (accounts.Own(ListOwner(c), e.Hash) == null) MarkTemp(c, e.Hash);
             if (!engine.WaitInfoAsync(e, InfoTimeoutMs).GetAwaiter().GetResult()) return SendText(s, req, 404, "torrent info timeout");
             // Как у TorrServer (web/api/play.go): файл в раздаче один — он, какой бы
             // номер ни пришел; иначе номер — число из file_stats
@@ -510,19 +706,53 @@ namespace TorrStreamTorrServer
                 stat = engine.FileById(e, index);
             }
             if (stat == null || stat.File == null) return SendText(s, req, 404, "file index out of range");
-            return ServeFile(client, s, req, e, stat);
+            return ServeFile(client, s, req, c, e, stat);
         }
 
-        string M3u(Request req, TorrEntry e)
+        static bool Redirect(Stream s, Request req, string url)
+        {
+            WriteHead(s, req, 302, "text/plain; charset=utf-8", 0, "Location: " + url + "\r\n", req.KeepAlive);
+            return true;
+        }
+
+        // Ссылка на поток для узла: путь и запрос как пришли, без своих параметров
+        // входа; голый хэш — полной ссылкой (с трекерами) из базы
+        string NodePath(Request req, string path, string link, string index = null)
+        {
+            string hash = TorrEngine.HashFromLink(link);
+            if (hash != null && !link.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase))
+            {
+                var known = engine.Get(hash);
+                string full = known != null ? known.Link : accounts.Own(ListOwner(req.Caller), hash)?.Link;
+                if (!string.IsNullOrEmpty(full)) link = full;
+            }
+            var sb = new StringBuilder();
+            foreach (var seg in path.Split('/'))
+                if (seg.Length > 0) sb.Append('/').Append(Uri.EscapeDataString(seg));
+            sb.Append("?link=").Append(Uri.EscapeDataString(link));
+            if (index != null) sb.Append("&index=").Append(Uri.EscapeDataString(index)).Append("&play");
+            foreach (var kv in req.Query)
+            {
+                if (kv.Key == "link" || kv.Key == "token" || kv.Key.StartsWith("ms_")) continue;
+                if (index != null && (kv.Key == "index" || kv.Key == "play")) continue;
+                sb.Append('&').Append(Uri.EscapeDataString(kv.Key));
+                if (kv.Value.Length > 0) sb.Append('=').Append(Uri.EscapeDataString(kv.Value));
+            }
+            return sb.ToString();
+        }
+
+        string M3u(Request req, Caller c, TorrEntry e)
         {
             string host = req.Header("Host") ?? ("127.0.0.1:" + port);
+            // Плеер, который откроет плейлист, пароля не знает — ссылки с ключом пользователя
+            string auth = c.User != null && !c.Local ? "&token=" + c.User.Token : "";
             var sb = new StringBuilder("#EXTM3U\n");
             foreach (var f in e.Files.Where(x => x.File != null))
             {
                 string name = f.Path.Substring(f.Path.LastIndexOf('/') + 1);
                 sb.Append("#EXTINF:0,").Append(name).Append('\n');
                 sb.Append("http://").Append(host).Append("/stream/").Append(Uri.EscapeDataString(name))
-                  .Append("?link=").Append(e.Hash).Append("&index=").Append(f.Id).Append("&play\n");
+                  .Append("?link=").Append(e.Hash).Append("&index=").Append(f.Id).Append("&play").Append(auth).Append('\n');
             }
             return sb.ToString();
         }
@@ -564,7 +794,7 @@ namespace TorrStreamTorrServer
             }
         }
 
-        bool ServeFile(TcpClient client, Stream s, Request req, TorrEntry e, FileStat f)
+        bool ServeFile(TcpClient client, Stream s, Request req, Caller c, TorrEntry e, FileStat f)
         {
             long total = f.Length, start = 0, end = total - 1;
             bool partial = false;
@@ -601,11 +831,17 @@ namespace TorrStreamTorrServer
             if (req.Method == "HEAD" || length <= 0) return true;
 
             var reader = engine.OpenReader(e, f, start);
+            // Кто смотрит — для «Потоков», счёта зрителей (балансировка) и трафика
+            var info = Streams.Begin(new StreamInfo
+            {
+                Viewer = c.Viewer, Who = c.Who, Login = c.Login, Remote = c.Remote, Hash = e.Hash, Title = e.Title,
+                Path = f.Path, FileId = f.Id, Ip = c.Ip, From = start,
+            });
             // В журнал — кто и откуда читает: по нему видно, чего ждёт плеер
             var started = System.Diagnostics.Stopwatch.StartNew();
-            long sent = 0;
+            long sent = 0, counted = 0;
             string how = "прервано";
-            log(e.Hash + ": файл " + f.Id + " с " + Mb(start) + (partial ? " (Range " + range + ")" : "") + ", " + Remote(client));
+            log(e.Hash + ": файл " + f.Id + " с " + Mb(start) + (partial ? " (Range " + range + ")" : "") + ", " + Remote(client) + (c.User != null || c.Remote != null ? " (" + c.Who + ")" : ""));
             try
             {
                 var buf = new byte[ChunkSize];
@@ -617,6 +853,9 @@ namespace TorrStreamTorrServer
                     s.Write(buf, 0, n);
                     left -= n;
                     sent += n;
+                    info.Sent = sent;
+                    // Трафик — порциями: в статистике виден и идущий просмотр
+                    if (sent - counted >= 4 << 20) { accounts.AddHttp(c.Login, c.Remote, sent - counted); counted = sent; }
                 }
                 how = "до конца запроса";
                 return true;
@@ -624,6 +863,8 @@ namespace TorrStreamTorrServer
             finally
             {
                 engine.CloseReader(reader);
+                Streams.End(info);
+                accounts.AddHttp(c.Login, c.Remote, sent - counted);
                 log(e.Hash + ": файл " + f.Id + " — " + how + ": отдано " + Mb(sent) + " за " + (started.ElapsedMilliseconds / 1000.0).ToString("0.0") + " с, позиция " + Mb(start + sent));
             }
         }

@@ -40,6 +40,10 @@ namespace TorrStreamTorrServer
         public string Hash;
         public string Link;         // magnet — по нему торрент открывается снова
         public string Title = "", Poster = "", Data = "", Category = "", Name = "";
+        // id в TMDB и сезоны (TorrStream при добавлении): у торрента без владельца
+        // и в общем списке админа; у пользователя — свои (UserTorrent)
+        public long TmdbId;
+        public int[] Seasons = new int[0];
         public long Timestamp, Size;
         public bool InDb;
         public List<FileStat> Files = new List<FileStat>();
@@ -428,6 +432,8 @@ namespace TorrStreamTorrServer
                         Name = item.Str("name") ?? "",
                         Timestamp = item.Num("timestamp") ?? 0,
                         Size = item.Num("size") ?? 0,
+                        TmdbId = item.Num("tmdb_id") ?? 0,
+                        Seasons = TorrMeta.Seasons(item.TryGetValue("seasons", out var sv) ? sv : null) ?? new int[0],
                         InDb = true,
                     };
                     if (string.IsNullOrEmpty(e.Hash)) continue;
@@ -452,7 +458,10 @@ namespace TorrStreamTorrServer
                 {
                     w.Obj().Prop("hash", e.Hash).Prop("link", e.Link ?? "").Prop("title", e.Title).Prop("poster", e.Poster)
                         .Prop("data", e.Data).Prop("category", e.Category).Prop("name", e.Name)
-                        .Prop("timestamp", e.Timestamp).Prop("size", e.Size).Key("files").Arr();
+                        .Prop("timestamp", e.Timestamp).Prop("size", e.Size).Prop("tmdb_id", e.TmdbId);
+                    w.Key("seasons").Arr();
+                    foreach (var sn in e.Seasons) w.Val(sn);
+                    w.EndArr().Key("files").Arr();
                     foreach (var f in e.Files) w.Obj().Prop("id", f.Id).Prop("path", f.Path).Prop("length", f.Length).EndObj();
                     w.EndArr().EndObj();
                 }
@@ -912,6 +921,101 @@ namespace TorrStreamTorrServer
             foreach (var e in List()) await RemoveAsync(e.Hash).ConfigureAwait(false);
         }
 
+        // ==================== для пользователей (Accounts.cs) ====================
+
+        /// <summary>
+        /// Торрент из списка пользователя — в базу движка, если его там нет
+        /// (db.json потерян или торрент снимали из базы): иначе список не покажет файлы
+        /// </summary>
+        public TorrEntry Remember(UserTorrent t)
+        {
+            if (t == null || string.IsNullOrEmpty(t.Hash)) return null;
+            bool save = false;
+            TorrEntry e;
+            lock (sync)
+            {
+                if (!entries.TryGetValue(t.Hash, out e))
+                {
+                    string link = t.Link;
+                    if (string.IsNullOrEmpty(link))
+                    {
+                        try { link = new MagnetLink(ParseHash(t.Hash)).ToV1String(); } catch { return null; }
+                    }
+                    e = new TorrEntry { Hash = t.Hash, Link = link, Title = t.Title ?? "", Timestamp = t.Timestamp, TmdbId = t.TmdbId, Seasons = t.Seasons ?? new int[0], Category = t.Category ?? "" };
+                    entries[t.Hash] = e;
+                }
+                if (!e.InDb) { e.InDb = true; save = true; }
+            }
+            if (save) SaveDb();
+            return e;
+        }
+
+        /// <summary>
+        /// Торрент больше ни у кого в списке, но его смотрят: из базы движка —
+        /// закроется сам, когда досмотрят (CloseIdle), как торрент без «в базу»
+        /// </summary>
+        public void Unsave(string hash)
+        {
+            var e = Get(hash);
+            if (e == null) return;
+            bool save;
+            lock (sync)
+            {
+                save = e.InDb;
+                e.InDb = false;
+                if (e.Manager == null && e.Activation == null) entries.Remove(e.Hash);
+            }
+            if (save) SaveDb();
+        }
+
+        // Трафик BitTorrent для статистики: счётчики MonoTorrent — у каждого торрента
+        // с его открытия, копим приросты. Закрытый торрент считаем последний раз
+        // следующим проходом (счётчики после остановки не меняются) и забываем
+        readonly Dictionary<TorrentManager, long[]> btSeen = new Dictionary<TorrentManager, long[]>();
+        long btDownTotal, btUpTotal;
+
+        /// <summary>Принято и отдано пирам с запуска службы, байт</summary>
+        public long BtDownloaded => Interlocked.Read(ref btDownTotal);
+        public long BtUploaded => Interlocked.Read(ref btUpTotal);
+
+        void SampleTraffic()
+        {
+            HashSet<TorrentManager> open;
+            lock (sync) open = new HashSet<TorrentManager>(entries.Values.Select(x => x.Manager).Where(x => x != null));
+            lock (btSeen)
+            {
+                foreach (var m in open) if (!btSeen.ContainsKey(m)) btSeen[m] = new long[2];
+                foreach (var m in btSeen.Keys.ToList())
+                {
+                    var last = btSeen[m];
+                    long r, s;
+                    try { r = m.Monitor.DataBytesReceived; s = m.Monitor.DataBytesSent; }
+                    catch { r = last[0]; s = last[1]; }
+                    if (r > last[0]) Interlocked.Add(ref btDownTotal, r - last[0]);
+                    if (s > last[1]) Interlocked.Add(ref btUpTotal, s - last[1]);
+                    last[0] = Math.Max(last[0], r);
+                    last[1] = Math.Max(last[1], s);
+                    if (!open.Contains(m)) btSeen.Remove(m);
+                }
+            }
+        }
+
+        /// <summary>id TMDB и сезоны торрента (0 и null — не трогать)</summary>
+        public void SetTmdb(string hash, long tmdbId, int[] seasons)
+        {
+            if (tmdbId <= 0 && seasons == null) return;
+            var e = Get(hash);
+            if (e == null) return;
+            bool save;
+            lock (sync)
+            {
+                if (tmdbId > 0) e.TmdbId = tmdbId;
+                if (seasons != null) e.Seasons = seasons;
+                save = e.InDb;
+            }
+            if (save) SaveDb();
+        }
+
         public void SetMeta(string hash, string title, string poster, string data, string category)
         {
             var e = Get(hash);
@@ -1127,6 +1231,7 @@ namespace TorrStreamTorrServer
                 }
             }
             foreach (var r in reports) log(r);
+            try { SampleTraffic(); } catch (Exception ex) { log("трафик: " + ex.Message); }
             try { dhtBoot?.Tick(engine != null && engine.IsRunning, now); } catch (Exception ex) { log("DHT: " + ex.Message); }
             // Вне sync: PeerRotation ждёт главный цикл MonoTorrent, а его обработчики берут sync
             foreach (var kv in rotate)
@@ -1458,19 +1563,40 @@ namespace TorrStreamTorrServer
             return 3;
         }
 
-        /// <summary>Состояние торрента полями TorrentStatus из TorrServer MatriX</summary>
-        public void WriteStatus(JsonWriter w, TorrEntry e)
+        /// <summary>
+        /// Состояние торрента полями TorrentStatus из TorrServer MatriX. own — запись
+        /// из списка пользователя (Accounts.cs): название, data, категория, время — его;
+        /// owners — у кого торрент в списке (видит админ)
+        /// </summary>
+        public void WriteStatus(JsonWriter w, TorrEntry e, UserTorrent own = null, IEnumerable<string> owners = null)
         {
             lock (sync)
             {
                 int stat = Stat(e);
+                // Торрент в списке пользователя — для него «в базе», даже если движок его не хранит
+                if (own != null && stat == 4) stat = 5;
                 var m = e.Manager;
+                string title = own != null && !string.IsNullOrEmpty(own.Title) ? own.Title : e.Title;
+                string data = own != null ? own.Data : e.Data;
                 w.Obj()
-                    .Prop("title", e.Title).Prop("category", e.Category).Prop("poster", e.Poster)
-                    .Prop("data", string.IsNullOrEmpty(e.Data) ? FilesData(e) : e.Data)
-                    .Prop("timestamp", e.Timestamp).Prop("name", e.Name).Prop("hash", e.Hash)
+                    .Prop("title", title).Prop("category", own != null ? own.Category : e.Category).Prop("poster", e.Poster)
+                    .Prop("data", string.IsNullOrEmpty(data) ? FilesData(e) : data)
+                    .Prop("timestamp", own != null ? own.Timestamp : e.Timestamp).Prop("name", e.Name).Prop("hash", e.Hash)
                     .Prop("stat", stat).Prop("stat_string", StatNames[stat])
                     .Prop("torrent_size", e.Size);
+                // MonoServer: что это за фильм или сериал — TorrStream не разбирает название
+                long tmdbId = own != null && own.TmdbId > 0 ? own.TmdbId : e.TmdbId;
+                var seasons = own != null && own.Seasons != null && own.Seasons.Length > 0 ? own.Seasons : e.Seasons;
+                if (tmdbId > 0) w.Prop("tmdb_id", tmdbId);
+                w.Key("seasons").Arr();
+                foreach (var sn in seasons ?? new int[0]) w.Val(sn);
+                w.EndArr();
+                if (owners != null)
+                {
+                    w.Key("owners").Arr();
+                    foreach (var o in owners) w.Val(o);
+                    w.EndArr();
+                }
                 if (m != null)
                 {
                     long filled = e.Store != null ? e.Store.Filled : 0;
@@ -1740,8 +1866,21 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>collect — сначала полная сборка мусора: что останется в gc_mb, то и правда занято</summary>
-        public void WriteVersion(JsonWriter w, int httpPort, bool collect = false)
+        public void WriteVersion(JsonWriter w, int httpPort, bool collect = false, bool brief = false)
         {
+            // Без входа — только чем служба себя называет (страница Tizen, клиенты):
+            // память, адреса и состояние движка — для веб-интерфейса админа
+            if (brief)
+            {
+                w.Obj().Prop("name", "MonoServer").Prop("service", ServiceVersion).Prop("echo", EchoVersion)
+                    .Prop("engine", "MonoTorrent " + EngineVersion())
+                    .Prop("runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription)
+                    .Prop("port", httpPort).Prop("cache_mb", Settings.CacheSize >> 20);
+                lock (sync) w.Prop("torrents", entries.Count);
+                if (StartError != null) w.Prop("error", StartError);
+                w.EndObj();
+                return;
+            }
             int active;
             long filled = 0;
             lock (sync)

@@ -19,6 +19,8 @@
   <ItemGroup>
     <!-- netstandard2.0: Tizen 5.5 — .NET Core 3.x, сборка tizen40 -->
     <PackageReference Include="MonoTorrent" Version="3.0.2" />
+    <!-- База MonoServer (Accounts.cs): чистый C#, без нативного кода -->
+    <PackageReference Include="LiteDB" Version="5.0.21" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,6 +31,7 @@
   <ItemGroup>
     <!-- Страница отладки на «/» (WebPage.cs) -->
     <EmbeddedResource Include="web\index.html" LogicalName="web.index.html" />
+    <EmbeddedResource Include="web\login.html" LogicalName="web.login.html" />
   </ItemGroup>
 
   <ItemGroup>

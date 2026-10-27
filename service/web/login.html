@@ -1,0 +1,169 @@
+<!doctype html>
+<!--
+  Вход в веб-интерфейс MonoServer (WebPage.Login): служба отдаёт эту страницу на «/»,
+  пока не вошёл admin. Первый вход — код из журнала службы («Первый вход в
+  веб-интерфейс: код …»), затем новый пароль admin. Дальше — логин и пароль.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>MonoServer — вход</title>
+<style>
+:root {
+  --bg: #0b0d12; --panel: #13161d; --panel2: #1a1e27; --line: #262b37;
+  --text: #e8eaf0; --muted: #8a92a6; --accent: #6ea8ff; --accent2: #8b7bff; --accent-bg: rgba(110,168,255,.12);
+  --bad: #ff5d5d; --ok: #3ccf74;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f6fa; --panel: #ffffff; --panel2: #f1f3f8; --line: #e2e6ee;
+    --text: #151925; --muted: #667089; --accent: #2f6fe4; --accent2: #6b55e8; --accent-bg: rgba(47,111,228,.1);
+    --bad: #e03b3b; --ok: #1fa85a;
+    --shadow: 0 1px 2px rgba(20,30,60,.06), 0 8px 24px rgba(20,30,60,.08);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; }
+body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px 16px; }
+.box { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 26px 24px 22px; box-shadow: var(--shadow); }
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; letter-spacing: .5px; box-shadow: 0 4px 14px rgba(110,120,255,.35); }
+h1 { font-size: 18px; margin: 0; font-weight: 650; }
+h2 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+input { width: 100%; font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+input.code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 20px; letter-spacing: 3px; text-align: center; }
+button { width: 100%; margin-top: 16px; font: inherit; font-weight: 600; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: 0; border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+button:disabled { opacity: .6; cursor: default; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.msg { min-height: 20px; margin-top: 12px; font-size: 13px; }
+.msg.err { color: var(--bad); }
+.msg.ok { color: var(--ok); }
+.hint { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--panel2); color: var(--muted); font-size: 12.5px; }
+.hint code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); }
+form { display: none; }
+form.on { display: block; }
+@media (max-width: 700px) { input, button { font-size: 16px; min-height: 44px; } input.code { font-size: 20px; } }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="brand"><div class="logo">MS</div><h1>MonoServer</h1></div>
+
+  <!-- Обычный вход -->
+  <form id="f-login" autocomplete="on">
+    <h2>Вход</h2>
+    <p>Веб-интерфейс открыт только администратору.</p>
+    <label for="l-login">Пользователь</label>
+    <input id="l-login" name="username" value="admin" autocomplete="username" autocapitalize="off" spellcheck="false">
+    <label for="l-pass">Пароль</label>
+    <input id="l-pass" name="password" type="password" autocomplete="current-password">
+    <button type="submit">Войти</button>
+  </form>
+
+  <!-- Первый вход: шаг 1 — код из журнала -->
+  <form id="f-code">
+    <h2>Первый вход</h2>
+    <p>Введите код из журнала службы — строка «Первый вход в веб-интерфейс: код …».</p>
+    <label for="c-code">Код</label>
+    <input id="c-code" class="code" inputmode="numeric" autocomplete="one-time-code" placeholder="0000-0000" maxlength="9">
+    <button type="submit">Дальше</button>
+    <div class="hint">Журнал — в консоли или <code>journalctl -u monoserver</code> на Linux, в окне службы на Windows, «Журнал» в приложении на Android. После пяти неверных попыток код меняется — новый будет в журнале.</div>
+  </form>
+
+  <!-- Первый вход: шаг 2 — пароль admin -->
+  <form id="f-pass" autocomplete="on">
+    <h2>Пароль администратора</h2>
+    <p>Им вы будете входить в веб-интерфейс как <b>admin</b>.</p>
+    <input type="text" name="username" value="admin" autocomplete="username" hidden>
+    <label for="p-1">Новый пароль</label>
+    <input id="p-1" type="password" autocomplete="new-password" minlength="6">
+    <label for="p-2">Ещё раз</label>
+    <input id="p-2" type="password" autocomplete="new-password" minlength="6">
+    <button type="submit">Сохранить и войти</button>
+  </form>
+
+  <div class="msg" id="msg"></div>
+</div>
+<script>
+(function () {
+  'use strict';
+  function $(id) { return document.getElementById(id); }
+  function show(id) {
+    var forms = document.getElementsByTagName('form');
+    for (var i = 0; i < forms.length; i++) forms[i].className = forms[i].id === id ? 'on' : '';
+    var first = $(id).querySelector('input:not([hidden])');
+    if (first) setTimeout(function () { first.focus(); }, 30);
+  }
+  function msg(text, cls) { var m = $('msg'); m.textContent = text || ''; m.className = 'msg' + (cls ? ' ' + cls : ''); }
+  function api(method, url, body, cb) {
+    var x = new XMLHttpRequest();
+    x.open(method, url, true);
+    x.timeout = 15000;
+    x.setRequestHeader('X-MonoServer-Web', '1');
+    if (body) x.setRequestHeader('Content-Type', 'application/json');
+    x.onload = function () {
+      var d = null;
+      try { d = JSON.parse(x.responseText); } catch (e) { }
+      cb(x.status >= 200 && x.status < 300 ? null : ((d && d.error) || ('ошибка ' + x.status)), d);
+    };
+    x.onerror = function () { cb('нет связи со службой', null); };
+    x.ontimeout = function () { cb('служба не ответила', null); };
+    x.send(body ? JSON.stringify(body) : null);
+  }
+  function busy(form, on) { var b = form.querySelector('button'); if (b) b.disabled = on; }
+  // После входа — сама страница (служба отдаст веб-интерфейс)
+  function enter() { location.replace('/' + (location.hash || '')); }
+
+  var code = '';
+  $('f-login').onsubmit = function (ev) {
+    ev.preventDefault();
+    var f = this;
+    busy(f, true); msg('Вход…');
+    api('POST', '/api/login', { login: $('l-login').value.trim(), password: $('l-pass').value, web: true }, function (err) {
+      busy(f, false);
+      if (err) { msg(err, 'err'); $('l-pass').select(); return; }
+      msg('Готово', 'ok'); enter();
+    });
+  };
+  $('c-code').oninput = function () {
+    var d = this.value.replace(/\D/g, '').slice(0, 8);
+    this.value = d.length > 4 ? d.slice(0, 4) + '-' + d.slice(4) : d;
+  };
+  $('f-code').onsubmit = function (ev) {
+    ev.preventDefault();
+    var f = this, c = $('c-code').value.trim();
+    if (c.replace(/\D/g, '').length !== 8) { msg('Код — 8 цифр', 'err'); return; }
+    busy(f, true); msg('Проверяю…');
+    api('POST', '/api/setup', { code: c }, function (err) {
+      busy(f, false);
+      if (err) { msg(err, 'err'); $('c-code').select(); return; }
+      code = c; msg(''); show('f-pass');
+    });
+  };
+  $('f-pass').onsubmit = function (ev) {
+    ev.preventDefault();
+    var f = this, a = $('p-1').value, b = $('p-2').value;
+    if (a.length < 6) { msg('Пароль — не короче 6 символов', 'err'); return; }
+    if (a !== b) { msg('Пароли не совпадают', 'err'); return; }
+    busy(f, true); msg('Сохраняю…');
+    api('POST', '/api/setup', { code: code, password: a }, function (err) {
+      busy(f, false);
+      if (err) { msg(err, 'err'); if (/код/.test(err)) show('f-code'); return; }
+      msg('Пароль задан', 'ok'); enter();
+    });
+  };
+
+  api('GET', '/api/setup', null, function (err, d) {
+    show(d && d.needs_setup ? 'f-code' : 'f-login');
+    if (err) msg(err, 'err');
+  });
+})();
+</script>
+</body>
+</html>

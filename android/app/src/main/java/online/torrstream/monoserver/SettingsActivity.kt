@@ -293,6 +293,13 @@ class SettingsActivity : AppCompatActivity() {
         c.requestMethod = "POST"
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
+        // Ключ приложения (служба пишет его в local.key при запуске): с ним настройки
+        // меняются и при включённом входе — пароль admin приложению не нужен
+        try {
+            val key = File(Env.dataDir(this), "local.key").readText().trim()
+            if (key.isNotEmpty()) c.setRequestProperty("X-MonoServer-Local", key)
+        } catch (_: Exception) {
+        }
         try {
             c.outputStream.use { it.write(body.toByteArray()) }
             if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")

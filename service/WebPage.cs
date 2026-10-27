@@ -1,33 +1,31 @@
-// Страница отладки на «/» — web/index.html, вшита в сборку (EmbeddedResource
-// в обоих .csproj): торренты и файлы, карта кэша с окнами читателей (сколько
-// скачано вперёд), пиры, журнал вживую, настройки. Открывается с телефона или
-// ПК: http://<IP телевизора>:8090/
+// Веб-интерфейс на «/» — web/index.html, вшит в сборку (EmbeddedResource
+// во всех .csproj): торренты и файлы, карта кэша с окнами читателей (сколько
+// скачано вперёд), пиры, журнал вживую, настройки, пользователи, трафик,
+// балансировка. Открывается с телефона или ПК: http://<IP телевизора>:8090/.
+// Без входа admin вместо него — web/login.html: вход или первый вход по коду
+// из журнала
 using System.IO;
-using System.Reflection;
 
 namespace TorrStreamTorrServer
 {
     static class WebPage
     {
-        static string html;
+        static string html, login;
 
-        public static string Html
+        public static string Html => html ?? (html = Load("web.index.html"));
+        public static string Login => login ?? (login = Load("web.login.html"));
+
+        static string Load(string name)
         {
-            get
+            try
             {
-                if (html != null) return html;
-                try
-                {
-                    using (var s = typeof(WebPage).Assembly.GetManifestResourceStream("web.index.html"))
-                    using (var r = new StreamReader(s))
-                        html = r.ReadToEnd();
-                }
-                catch
-                {
-                    html = "<!doctype html><meta charset=\"utf-8\"><title>TorrServer</title><p>Нет страницы в сборке. " +
-                        "<a href=\"/version\">/version</a> · <a href=\"/log\">/log</a></p>";
-                }
-                return html;
+                using (var s = typeof(WebPage).Assembly.GetManifestResourceStream(name))
+                using (var r = new StreamReader(s))
+                    return r.ReadToEnd();
+            }
+            catch
+            {
+                return "<!doctype html><meta charset=\"utf-8\"><title>MonoServer</title><p>Нет страницы в сборке: " + name + "</p>";
             }
         }
     }

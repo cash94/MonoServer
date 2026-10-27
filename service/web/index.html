@@ -165,10 +165,62 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
 .set-grid label span { overflow: hidden; text-overflow: ellipsis; }
 .set-grid input[type=number], .set-grid input[type=text] { width: 120px; }
 .empty { color: var(--muted); padding: 28px 0; text-align: center; }
-@media (max-width: 1000px) {
-  .info-grid { grid-template-columns: 1fr; }
+/* Владельцы торрента (видит админ) */
+.owners { display: flex; flex-wrap: wrap; gap: 4px; }
+.owner { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--accent-bg); color: var(--accent); }
+.owner.none { background: var(--panel2); color: var(--muted); }
+#logout { flex: none; }
+/* Пользователи */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; align-items: end; }
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+.form-grid input, .form-grid select { width: 100%; }
+.switch-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--panel2); border-radius: 10px; margin-top: 8px; cursor: pointer; }
+.switch-row b { font-weight: 600; }
+.switch-row small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
+.switch-row input { margin-top: 3px; flex: none; }
+.utable td { vertical-align: middle; }
+.utable .ulogin { font-weight: 600; }
+.utable .unote { color: var(--muted); font-size: 12px; }
+.urow { cursor: pointer; }
+.urow.open td { background: var(--panel2); }
+.udetail > td { background: var(--panel2); padding: 0 12px 14px; }
+.ubox { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; padding-top: 6px; }
+.ubox .sub { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.ubox .sub h3 { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+.ubox .sub .row + .row { margin-top: 6px; }
+.ubox input[type=number] { width: 80px; }
+.tok { word-break: break-all; font-family: var(--mono); font-size: 12px; background: var(--panel2); border-radius: 8px; padding: 6px 8px; margin: 4px 0 8px; }
+.utlist { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
+.utlist li { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.utlist li:last-child { border-bottom: 0; }
+.utlist li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Трафик: столбцы по дням, одна серия */
+.seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; }
+.seg button { background: none; border: 0; color: var(--muted); font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 7px; cursor: pointer; }
+.seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.chart { position: relative; margin-top: 12px; }
+/* Справа — поле под подписи шкалы, столбцы под них не заходят */
+.chart .plot { display: flex; align-items: flex-end; gap: 2px; height: 180px; border-bottom: 1px solid var(--line2); margin-right: 64px; }
+.chart .col { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; min-width: 0; cursor: default; }
+.chart .col i { display: block; width: 100%; max-width: 28px; margin: 0 auto; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 0; }
+.chart .col:hover i, .chart .col.hl i { filter: brightness(1.2); }
+.chart .col.zero i { background: none; }
+.chart .gridline { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line); pointer-events: none; }
+.chart .gridline span { position: absolute; right: 0; top: -9px; width: 60px; text-align: right; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chart .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin: 4px 64px 0 0; font-variant-numeric: tabular-nums; }
+.meter { height: 6px; background: var(--empty); border-radius: 3px; overflow: hidden; min-width: 60px; }
+.meter i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+/* Балансировка */
+.ntable input[type=text], .ntable input:not([type]) { width: 100%; min-width: 120px; }
+.ntable input[type=number] { width: 70px; }
+.dot.off { background: var(--muted); box-shadow: none; }
+/* Семь вкладок с длинными подписями шапка вмещает только на широком экране */
+@media (max-width: 1360px) {
   nav .l-long { display: none; }
   nav .l-short { display: inline; }
+}
+@media (max-width: 1000px) {
+  .info-grid { grid-template-columns: 1fr; }
   .top { gap: 12px; }
 }
 /* Телефон: вкладки внизу под большой палец, шапка в одну строку, крупные
@@ -224,11 +276,15 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       <button data-tab="torrents" class="on"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="l-long">Торренты</span><span class="l-short">Торренты</span></button>
       <button data-tab="cache"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4"/></svg><span class="l-long">Кэш и читатели</span><span class="l-short">Кэш</span></button>
       <button data-tab="log"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="l-long">Журнал</span><span class="l-short">Журнал</span></button>
-      <button data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="l-long">Настройки</span><span class="l-short">Настройки</span></button>
+      <button data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="l-long">Настройки</span><span class="l-short">Настр.</span></button>
+      <button data-tab="users"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.3-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.8c2 .7 3.2 2.4 3.5 5.2"/></svg><span class="l-long">Пользователи</span><span class="l-short">Польз.</span></button>
+      <button data-tab="traffic"><svg class="i" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span class="l-long">Трафик</span><span class="l-short">Трафик</span></button>
+      <button data-tab="master"><svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5" rx="1.2"/><rect x="2.5" y="16" width="6" height="5" rx="1.2"/><rect x="15.5" y="16" width="6" height="5" rx="1.2"/><path d="M12 8v4M5.5 16v-2.5h13V16"/></svg><span class="l-long">Балансировка</span><span class="l-short">Узлы</span></button>
     </nav>
     <div class="status">
       <span id="ver-short">загрузка…</span>
       <button id="ver-toggle" type="button" title="Сервер: память, версия, сеть"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span class="l-long">Сервер</span></button>
+      <button id="logout" class="btn small" type="button" title="Выйти из веб-интерфейса">Выйти</button>
     </div>
   </div>
   <!-- Панель «Сервер»: память всего процесса и что из неё что, версия, сеть -->
@@ -267,6 +323,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     </div>
     <div class="row between" style="margin:2px 2px 10px">
       <input id="list-filter" class="grow" placeholder="Поиск по названию" autocomplete="off" type="search">
+      <select id="list-owner" title="Чьи торренты показывать"><option value="">Все пользователи</option></select>
       <span class="muted hide-sm" id="list-time"></span>
     </div>
     <div class="tgrid" id="tlist"><div class="empty">Загрузка…</div></div>
@@ -317,6 +374,106 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       </form>
     </div>
   </section>
+
+  <!-- ==================== Пользователи ==================== -->
+  <section id="tab-users">
+    <div class="card">
+      <h2>Доступ</h2>
+      <label class="switch-row"><input type="checkbox" id="acc-require"><span><b>Потоки и API — только со входом</b>
+        <small>TorrStream и Lampa входят логином и паролем пользователя (как к TorrServer с паролем), плееры — по ссылке с ключом. Выключено — как раньше: без пароля, со списком торрентов admin.</small></span></label>
+      <label class="switch-row"><input type="checkbox" id="acc-lan"><span><b>Домашняя сеть — без входа</b>
+        <small>Устройства из локальной сети (и это же устройство) смотрят без пароля, со списком admin. За nginx на этой же машине включайте, только если он передаёт X-Forwarded-For.</small></span></label>
+      <div class="muted" id="acc-msg" style="margin-top:6px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Новый пользователь</h2>
+      <form id="nu-form" class="form-grid" autocomplete="off">
+        <label>Логин<input id="nu-login" autocapitalize="off" spellcheck="false" required></label>
+        <label>Пароль<span class="row" style="flex-wrap:nowrap;gap:6px"><input id="nu-pass" type="text" autocomplete="new-password" required minlength="6"><button class="btn small" type="button" id="nu-gen" title="Придумать пароль">🎲</button></span></label>
+        <label>Срок<select id="nu-period"><option value="forever">Бессрочно</option><option value="days">Дней</option><option value="months">Месяцев</option></select></label>
+        <label>Сколько<input id="nu-amount" type="number" min="1" value="30" disabled></label>
+        <label>Заметка<input id="nu-note" placeholder="необязательно"></label>
+        <label><button class="btn primary" type="submit">Создать</button></label>
+      </form>
+      <div class="muted" id="nu-msg" style="margin-top:6px"></div>
+    </div>
+
+    <div class="card">
+      <div class="row between"><h2 style="margin:0">Пользователи</h2><span class="muted" id="users-sum"></span></div>
+      <div class="scroll-x"><table class="utable" style="margin-top:8px">
+        <thead><tr><th>Логин</th><th>Состояние</th><th>Срок</th><th class="num">Торрентов</th><th class="num">Сегодня</th><th class="num">30 дней</th><th class="num">Всего</th><th class="num">Смотрит</th></tr></thead>
+        <tbody id="users-body"><tr><td colspan="8" class="empty">Загрузка…</td></tr></tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div class="row between"><h2 style="margin:0">Сейчас смотрят</h2><span class="muted" id="streams-sum"></span></div>
+      <div class="scroll-x"><table style="margin-top:8px">
+        <thead><tr><th>Кто</th><th>Что</th><th>Адрес</th><th class="num">Отдано</th><th class="num">Скорость</th><th class="num">Время</th></tr></thead>
+        <tbody id="streams-body"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ==================== Трафик ==================== -->
+  <section id="tab-traffic">
+    <div class="card">
+      <div class="row between">
+        <h2 style="margin:0">Трафик сервера</h2>
+        <div class="seg" id="tr-days"><button data-d="7">7 дней</button><button data-d="30" class="on">30 дней</button><button data-d="90">90 дней</button></div>
+      </div>
+      <div class="stats" id="tr-stats" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <div class="row between">
+        <h2 style="margin:0" id="tr-chart-title">Отдано клиентам по дням</h2>
+        <div class="seg" id="tr-metric"><button data-m="http" class="on">Клиентам</button><button data-m="bt_down">Из сети ↓</button><button data-m="bt_up">В сеть ↑</button></div>
+      </div>
+      <div class="chart" id="tr-chart"></div>
+    </div>
+    <div class="card">
+      <h2>По пользователям</h2>
+      <p class="muted" style="margin-top:0">Отдано пользователю клиентом MonoServer (видео, плейлисты, замер скорости) — здесь и на узлах балансировки.</p>
+      <div class="scroll-x"><table>
+        <thead><tr><th>Пользователь</th><th class="num">Сегодня</th><th class="num">30 дней</th><th class="num">Всего</th><th style="width:30%">Доля за период</th></tr></thead>
+        <tbody id="tr-users"></tbody>
+      </table></div>
+      <div id="tr-remote"></div>
+    </div>
+  </section>
+
+  <!-- ==================== Балансировка ==================== -->
+  <section id="tab-master">
+    <div class="card">
+      <h2>Мастер-сервер</h2>
+      <p class="muted" style="margin-top:0">Когда здесь смотрят уже столько человек, сколько указано, новых зрителей сервер перенаправляет (HTTP 302) на узел, где есть место. Кто уже смотрит — остаётся, где смотрел. На узлах нет мест — смотрит здесь.</p>
+      <label class="switch-row"><input type="checkbox" id="ms-enabled"><span><b>Перенаправлять на узлы</b><small id="ms-now">—</small></span></label>
+      <div class="row" style="margin-top:10px">
+        <label class="muted">Зрителей здесь, не больше <input type="number" id="ms-local" min="0" max="10000" style="width:80px"></label>
+        <span class="muted">0 — всех сразу на узлы</span>
+      </div>
+      <h2 style="margin-top:16px">Узлы</h2>
+      <div class="scroll-x"><table class="ntable">
+        <thead><tr><th></th><th>Название</th><th>Адрес</th><th>Ключ узла</th><th class="num">Макс.</th><th>Вкл.</th><th>Состояние</th><th></th></tr></thead>
+        <tbody id="ms-nodes"></tbody>
+      </table></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" type="button" id="ms-add">Добавить узел</button>
+        <button class="btn primary" type="button" id="ms-save">Сохранить</button>
+        <span class="muted" id="ms-msg"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Этот сервер как узел</h2>
+      <p class="muted" style="margin-top:0">Чтобы мастер отправлял сюда зрителей, добавьте на мастере узел с адресом этого сервера и этим ключом. С ним мастер узнаёт, сколько здесь смотрят, и подписывает перенаправления — пользователи мастера смотрят здесь без своей учётной записи.</p>
+      <div class="tok" id="ms-key">—</div>
+      <div class="row">
+        <button class="btn small" type="button" id="ms-key-copy">Скопировать</button>
+        <button class="btn small danger" type="button" id="ms-key-new">Новый ключ</button>
+      </div>
+    </div>
+  </section>
 </main>
 <div id="tip"></div>
 
@@ -350,12 +507,17 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     var x = new XMLHttpRequest();
     x.open(method, url, true);
     x.timeout = 15000;
+    // Свой заголовок — служба не просит у браузера Basic-окно, а отвечает 401
+    x.setRequestHeader('X-MonoServer-Web', '1');
     if (body != null) x.setRequestHeader('Content-Type', 'application/json');
     x.onload = function () {
       var data = x.responseText;
       var type = x.getResponseHeader('Content-Type') || '';
       if (type.indexOf('json') >= 0) { try { data = JSON.parse(data); } catch (e) { } }
-      cb(x.status >= 200 && x.status < 300 ? null : (x.status + ' ' + (x.responseText || x.statusText)), data);
+      // Сессия кончилась или пароль сменили на другом устройстве — на вход
+      if (x.status === 401) { location.replace('/login' + location.hash); return; }
+      var msg = data && typeof data === 'object' && data.error ? data.error : (x.responseText || x.statusText);
+      cb(x.status >= 200 && x.status < 300 ? null : (x.status + ' ' + msg), data);
     };
     x.onerror = function () { cb('нет связи со службой', null); };
     x.ontimeout = function () { cb('служба не ответила за 15 с', null); };
@@ -462,25 +624,67 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     return [];
   }
   function isActive(t) { return t.download_speed !== undefined; }
+  // [1,2,3,5] → «1–3, 5»
+  function seasonsText(list) {
+    var out = [], i = 0;
+    while (i < list.length) {
+      var j = i;
+      while (j + 1 < list.length && list[j + 1] === list[j] + 1) j++;
+      out.push(j > i ? list[i] + '–' + list[j] : String(list[i]));
+      i = j + 1;
+    }
+    return out.join(', ');
+  }
 
   function loadTorrents() {
     post('/torrents', { action: 'list' }, function (err, list) {
       if (err) { $('list-time').innerHTML = '<span class="err-text">' + esc(err) + '</span>'; return; }
       torrents = list || [];
       $('list-time').textContent = new Date().toLocaleTimeString();
+      fillOwnerSelect();
       renderTorrents();
       fillCacheSelect();
     });
   }
 
+  var listOwner = '';
+  function ownedBy(t, login) {
+    var o = t.owners || [];
+    if (login === '-') return !o.length;
+    for (var i = 0; i < o.length; i++) if (o[i] === login) return true;
+    return false;
+  }
   function visibleTorrents() {
-    if (!listFilter) return torrents;
+    if (!listFilter && !listOwner) return torrents;
     var q = listFilter.toLowerCase(), out = [];
     for (var i = 0; i < torrents.length; i++) {
       var t = torrents[i];
-      if (((t.title || '') + ' ' + (t.name || '') + ' ' + t.hash).toLowerCase().indexOf(q) >= 0) out.push(t);
+      if (listOwner && !ownedBy(t, listOwner)) continue;
+      if (!q || ((t.title || '') + ' ' + (t.name || '') + ' ' + t.hash).toLowerCase().indexOf(q) >= 0) out.push(t);
     }
     return out;
+  }
+  // Фильтр «чьи»: пользователи из владельцев списка
+  function fillOwnerSelect() {
+    var seen = {}, names = [];
+    for (var i = 0; i < torrents.length; i++) {
+      var o = torrents[i].owners || [];
+      for (var j = 0; j < o.length; j++) if (!seen[o[j]]) { seen[o[j]] = 1; names.push(o[j]); }
+    }
+    names.sort();
+    var html = '<option value="">Все пользователи</option>';
+    for (var k = 0; k < names.length; k++) html += '<option value="' + esc(names[k]) + '"' + (names[k] === listOwner ? ' selected' : '') + '>' + esc(names[k]) + '</option>';
+    html += '<option value="-"' + (listOwner === '-' ? ' selected' : '') + '>Ничьи (открыты без «в базу»)</option>';
+    var sel = $('list-owner');
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+  }
+  $('list-owner').onchange = function () { listOwner = this.value; torrentsLayout = ''; renderTorrents(); };
+  function ownersHtml(t) {
+    var o = t.owners || [];
+    if (!o.length) return '<span class="owner none" title="Ни у кого в списке — закроется, когда досмотрят">ничей</span>';
+    var html = '';
+    for (var i = 0; i < o.length; i++) html += '<span class="owner">' + esc(o[i]) + '</span>';
+    return html;
   }
 
   // Части карточки, которые меняются раз в секунду. Карточка целиком
@@ -503,6 +707,8 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     return {
       status: '<span class="pill ' + (STAT_CLASS[t.stat] || '') + '">' + esc(statusOf(t)) + '</span>' +
         (t.torrent_size ? '<span>' + bytes(t.torrent_size) + '</span>' : '') +
+        (t.tmdb_id ? '<span title="id в TMDB (из TorrStream)">TMDB ' + esc(t.tmdb_id) + '</span>' : '') +
+        (t.seasons && t.seasons.length ? '<span>' + (t.seasons.length > 1 ? 'сезоны ' : 'сезон ') + esc(seasonsText(t.seasons)) + '</span>' : '') +
         (active && t.preloaded_bytes ? '<span>кэш ' + bytes(t.preloaded_bytes) + '</span>' : ''),
       stats: stats, bar: bar, actions: actions
     };
@@ -523,6 +729,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       '<div class="tbody">' +
         '<div class="ttitle" data-act="files" title="' + esc(t.title || t.name || t.hash) + '">' + esc(t.title || t.name || t.hash) + '</div>' +
         '<div class="tmeta" data-part="status">' + p.status + '</div>' +
+        '<div class="owners" title="У кого в списке">' + ownersHtml(t) + '</div>' +
         '<div class="tstats" data-part="stats">' + p.stats + '</div>' +
         '<div data-part="bar">' + p.bar + '</div>' +
         '<div class="tactions" data-part="actions">' + p.actions + '</div>' +
@@ -541,7 +748,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     }
     var layout = [];
     for (var i = 0; i < list.length; i++)
-      layout.push(list[i].hash + (isActive(list[i]) ? 'a' : '') + (openFiles[list[i].hash] ? '+' + filesOf(list[i]).length : '') + '|' + (list[i].poster || ''));
+      layout.push(list[i].hash + (isActive(list[i]) ? 'a' : '') + (openFiles[list[i].hash] ? '+' + filesOf(list[i]).length : '') + '|' + (list[i].poster || '') + '|' + (list[i].owners || []).join(' '));
     layout = layout.join(',');
     if (layout !== torrentsLayout) {
       torrentsLayout = layout;
@@ -592,7 +799,13 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     if (act === 'files') { openFiles[hash] = !openFiles[hash]; renderTorrents(); }
     else if (act === 'cache') { cacheHash = hash; fillCacheSelect(); showTab('cache', hash); }
     else if (act === 'drop') post('/torrents', { action: 'drop', hash: hash }, function () { loadTorrents(); });
-    else if (act === 'rem') { if (confirm('Удалить торрент из списка и базы?')) post('/torrents', { action: 'rem', hash: hash }, function () { loadTorrents(); }); }
+    else if (act === 'rem') {
+      // Из веб-интерфейса — у всех пользователей сразу
+      var t = null;
+      for (var i = 0; i < torrents.length; i++) if (torrents[i].hash === hash) t = torrents[i];
+      var o = t && t.owners && t.owners.length ? ' Он есть у: ' + t.owners.join(', ') + '.' : '';
+      if (confirm('Удалить торрент у всех пользователей и из базы сервера?' + o)) post('/api/torrents', { action: 'remove', hash: hash }, function () { loadTorrents(); });
+    }
     else if (act === 'preload') {
       el.textContent = 'Идёт…';
       el.disabled = true;
@@ -1002,22 +1215,428 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     });
   };
 
+  // ==================== выход ====================
+  $('logout').onclick = function () {
+    post('/api/logout', {}, function () { location.replace('/login'); });
+  };
+
+  function fmtDate(unix) {
+    var d = new Date(unix * 1000);
+    function p(n) { return n < 10 ? '0' + n : '' + n; }
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear();
+  }
+  function daysLeft(unix) { return Math.ceil((unix * 1000 - Date.now()) / 86400000); }
+  function plural(n, one, few, many) {
+    var m10 = n % 10, m100 = n % 100;
+    return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+  }
+  function errHtml(err) { return '<span class="err-text">' + esc(err) + '</span>'; }
+
+  // ==================== пользователи ====================
+  var users = [], openUser = null, userTorrents = {}, userMsg = {};
+
+  function loadAccess() {
+    request('GET', '/api/access', null, function (err, a) {
+      if (err || !a) { $('acc-msg').innerHTML = errHtml(err || 'нет ответа'); return; }
+      $('acc-require').checked = !!a.require_auth;
+      $('acc-lan').checked = !!a.lan_without_auth;
+      $('acc-lan').disabled = !a.require_auth;
+    });
+  }
+  $('acc-require').onchange = $('acc-lan').onchange = function () {
+    var body = { require_auth: $('acc-require').checked, lan_without_auth: $('acc-lan').checked };
+    if (body.require_auth && users.length <= 1 && !confirm('Пользователей, кроме admin, ещё нет — TorrStream и Lampa смогут смотреть только с логином admin. Включить вход?')) { loadAccess(); return; }
+    post('/api/access', body, function (err) {
+      $('acc-msg').innerHTML = err ? errHtml(err) : 'Сохранено';
+      loadAccess();
+    });
+  };
+
+  $('nu-period').onchange = function () {
+    $('nu-amount').disabled = this.value === 'forever';
+    if (this.value === 'months' && +$('nu-amount').value > 36) $('nu-amount').value = 1;
+  };
+  function randomPassword() {
+    var abc = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789', out = '', buf = new Uint8Array(10);
+    (window.crypto || window.msCrypto).getRandomValues(buf);
+    for (var i = 0; i < buf.length; i++) out += abc.charAt(buf[i] % abc.length);
+    return out;
+  }
+  $('nu-gen').onclick = function () { $('nu-pass').value = randomPassword(); };
+  $('nu-form').onsubmit = function (ev) {
+    ev.preventDefault();
+    var login = $('nu-login').value.trim(), pass = $('nu-pass').value;
+    $('nu-msg').textContent = 'Создаю…';
+    post('/api/users', { action: 'create', login: login, password: pass, period: $('nu-period').value, amount: +$('nu-amount').value, note: $('nu-note').value }, function (err) {
+      if (err) { $('nu-msg').innerHTML = errHtml(err); return; }
+      $('nu-msg').innerHTML = 'Создан <b>' + esc(login) + '</b> — пароль: <span class="mono">' + esc(pass) + '</span> (сохраните: позже его не показать)';
+      $('nu-login').value = ''; $('nu-pass').value = ''; $('nu-note').value = '';
+      openUser = login;
+      loadUsers();
+    });
+  };
+
+  function userState(u) {
+    if (u.role === 'admin') return '<span class="pill info">администратор</span>';
+    if (u.blocked) return '<span class="pill warn">заблокирован</span>';
+    if (u.expired) return '<span class="pill warn">срок истёк</span>';
+    return '<span class="pill ok">активен</span>';
+  }
+  function userTerm(u) {
+    if (u.role === 'admin' || !u.expires) return '<span class="muted">бессрочно</span>';
+    var d = daysLeft(u.expires);
+    return esc(fmtDate(u.expires)) + '<br><small class="muted">' + (d > 0 ? 'осталось ' + d + ' ' + plural(d, 'день', 'дня', 'дней') : 'истёк') + '</small>';
+  }
+
+  function streamUrl(u) {
+    return location.protocol + '//' + location.host + '/stream?link=<magnet>&index=1&play&token=' + u.token;
+  }
+
+  function userDetail(u) {
+    var me = u.role === 'admin', m = userMsg[u.login] || '';
+    var html = '<div class="ubox">';
+    if (!me) {
+      html += '<div class="sub"><h3>Срок</h3>' +
+        '<div class="row"><input type="number" min="1" value="1" data-f="amount"><select data-f="unit"><option value="months">месяцев</option><option value="days">дней</option></select>' +
+        '<button class="btn small" data-ua="extend" title="Прибавить к текущему сроку">Продлить</button><button class="btn small" data-ua="setterm" title="Срок от сегодня">С сегодня</button></div>' +
+        '<div class="row"><button class="btn small" data-ua="forever">Сделать бессрочным</button>' +
+        '<button class="btn small' + (u.blocked ? '' : ' danger') + '" data-ua="block">' + (u.blocked ? 'Разблокировать' : 'Заблокировать') + '</button></div></div>';
+    }
+    html += '<div class="sub"><h3>Пароль</h3><div class="row"><input type="text" data-f="pass" placeholder="новый пароль" autocomplete="new-password" class="grow">' +
+      '<button class="btn small" data-ua="gen" title="Придумать">🎲</button><button class="btn small" data-ua="pass">Сменить</button></div>' +
+      (me ? '<div class="muted" style="font-size:12px;margin-top:6px">Пароль входа в веб-интерфейс. Другие сессии admin закроются.</div>' : '') + '</div>';
+    if (!me) {
+      html += '<div class="sub"><h3>Заметка</h3><div class="row"><input data-f="note" class="grow" value="' + esc(u.note) + '"><button class="btn small" data-ua="note">Сохранить</button></div></div>';
+    }
+    html += '<div class="sub"><h3>Ключ для ссылок</h3><div class="muted" style="font-size:12px">Для плееров, которым не передать пароль: <span class="mono">?token=…</span> в ссылке на поток.</div>' +
+      '<div class="tok">' + esc(u.token) + '</div><div class="row"><button class="btn small" data-ua="copytoken">Скопировать</button>' +
+      '<button class="btn small danger" data-ua="newtoken" title="Старые ссылки с ключом перестанут работать">Новый ключ</button></div></div>';
+    var tl = userTorrents[u.login];
+    html += '<div class="sub" style="grid-column:1/-1"><h3>Торренты (' + u.torrents + ')</h3>';
+    if (!tl) html += '<div class="muted">Загрузка…</div>';
+    else if (!tl.length) html += '<div class="muted">Список пуст</div>';
+    else {
+      html += '<ul class="utlist">';
+      for (var i = 0; i < tl.length; i++)
+        html += '<li><span title="' + esc(tl[i].title) + '">' + (tl[i].active ? '<span class="dot"></span>' : '') + esc(tl[i].title) +
+          (tl[i].size ? ' <small class="muted">' + bytes(tl[i].size) + '</small>' : '') + '</span>' +
+          '<button class="btn small danger" data-ua="forget" data-hash="' + esc(tl[i].hash) + '">Убрать</button></li>';
+      html += '</ul>';
+    }
+    html += '<div class="row" style="margin-top:8px">' + (u.torrents ? '<button class="btn small danger" data-ua="wipe">Удалить все торренты</button>' : '') +
+      (!me ? '<button class="btn small danger" data-ua="delete">Удалить пользователя</button>' : '') + '</div></div>';
+    html += '</div>' + (m ? '<div style="margin-top:8px">' + m + '</div>' : '');
+    return html;
+  }
+
+  function renderUsers() {
+    var body = $('users-body'), html = '';
+    var active = 0, watching = 0;
+    for (var i = 0; i < users.length; i++) {
+      var u = users[i], open = openUser === u.login;
+      if (u.role !== 'admin' && !u.blocked && !u.expired) active++;
+      if (u.streams) watching++;
+      html += '<tr class="urow' + (open ? ' open' : '') + '" data-login="' + esc(u.login) + '">' +
+        '<td><div class="ulogin">' + esc(u.login) + '</div>' + (u.note ? '<div class="unote">' + esc(u.note) + '</div>' : '') + '</td>' +
+        '<td>' + userState(u) + '</td><td>' + userTerm(u) + '</td>' +
+        '<td class="num">' + u.torrents + '</td><td class="num">' + bytes(u.traffic_today) + '</td>' +
+        '<td class="num">' + bytes(u.traffic_30d) + '</td><td class="num">' + bytes(u.traffic_total) + '</td>' +
+        '<td class="num">' + (u.streams ? '<span class="dot"></span>' + u.streams : '<span class="muted">—</span>') + '</td></tr>';
+      if (open) html += '<tr class="udetail" data-login="' + esc(u.login) + '"><td colspan="8">' + userDetail(u) + '</td></tr>';
+    }
+    // Пока вводят в поле — не перерисовываем (раз в 5 с список обновляется)
+    var focused = document.activeElement;
+    if (focused && body.contains(focused) && focused.tagName === 'INPUT') return;
+    body.innerHTML = html || '<tr><td colspan="8" class="empty">Нет пользователей</td></tr>';
+    $('users-sum').textContent = 'активных ' + active + ' · смотрят ' + watching;
+  }
+
+  function loadUsers() {
+    request('GET', '/api/users', null, function (err, list) {
+      if (err || !list) { $('users-sum').innerHTML = errHtml(err || 'нет ответа'); return; }
+      users = list;
+      renderUsers();
+    });
+  }
+  function loadUserTorrents(login) {
+    post('/api/users', { action: 'torrents', login: login }, function (err, list) {
+      userTorrents[login] = err ? [] : list || [];
+      renderUsers();
+    });
+  }
+  function userAction(login, body, done) {
+    body.login = login;
+    post('/api/users', body, function (err) {
+      userMsg[login] = err ? errHtml(err) : (done || '<span class="muted">Сохранено</span>');
+      loadUsers();
+      if (body.action === 'forget' || body.action === 'wipe') loadUserTorrents(login);
+    });
+  }
+
+  $('users-body').onclick = function (ev) {
+    var el = ev.target, row = el;
+    while (row && row !== this && !row.getAttribute('data-login')) row = row.parentNode;
+    if (!row || row === this) return;
+    var login = row.getAttribute('data-login'), u = null;
+    for (var i = 0; i < users.length; i++) if (users[i].login === login) u = users[i];
+    if (!u) return;
+    if (row.className.indexOf('urow') >= 0) {
+      openUser = openUser === login ? null : login;
+      userMsg[login] = '';
+      if (openUser) { userTorrents[login] = null; loadUserTorrents(login); }
+      renderUsers();
+      return;
+    }
+    while (el && el !== row && !el.getAttribute('data-ua')) el = el.parentNode;
+    if (!el || el === row) return;
+    var act = el.getAttribute('data-ua');
+    function f(name) { var x = row.querySelector('[data-f="' + name + '"]'); return x ? x.value : ''; }
+    if (act === 'extend' || act === 'setterm') userAction(login, { action: 'update', period: f('unit'), amount: +f('amount'), extend: act === 'extend' });
+    else if (act === 'forever') userAction(login, { action: 'update', period: 'forever' });
+    else if (act === 'block') userAction(login, { action: 'update', blocked: !u.blocked });
+    else if (act === 'note') userAction(login, { action: 'update', note: f('note') });
+    else if (act === 'gen') row.querySelector('[data-f="pass"]').value = randomPassword();
+    else if (act === 'pass') {
+      var p = f('pass');
+      if (p.length < 6) { userMsg[login] = errHtml('пароль — не короче 6 символов'); renderUsers(); return; }
+      userAction(login, { action: 'update', password: p }, 'Пароль изменён: <span class="mono">' + esc(p) + '</span>');
+    }
+    else if (act === 'copytoken') copyText(u.token, el);
+    else if (act === 'newtoken') { if (confirm('Новый ключ для ' + login + '? Ссылки со старым перестанут работать.')) userAction(login, { action: 'update', new_token: true }); }
+    else if (act === 'forget') userAction(login, { action: 'forget', hash: el.getAttribute('data-hash') });
+    else if (act === 'wipe') { if (confirm('Удалить все торренты пользователя ' + login + '?')) userAction(login, { action: 'wipe' }); }
+    else if (act === 'delete') {
+      if (!confirm('Удалить пользователя ' + login + ' вместе с его списком торрентов и статистикой?')) return;
+      post('/api/users', { action: 'delete', login: login }, function (err) {
+        if (err) { userMsg[login] = errHtml(err); renderUsers(); return; }
+        openUser = null;
+        loadUsers();
+      });
+    }
+  };
+
+  function copyText(text, btn) {
+    function done() { var t = btn.textContent; btn.textContent = 'Скопировано'; setTimeout(function () { btn.textContent = t; }, 1500); }
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done, function () { prompt('Скопируйте:', text); }); return; }
+    var ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { prompt('Скопируйте:', text); }
+    document.body.removeChild(ta);
+  }
+
+  // Сейчас смотрят: скорость — по разнице «отдано» между опросами
+  var prevSent = {}, prevAt = 0;
+  function loadStreams() {
+    request('GET', '/api/streams', null, function (err, d) {
+      if (err || !d) { $('streams-sum').innerHTML = errHtml(err || 'нет ответа'); return; }
+      var now = Date.now(), dt = prevAt ? (now - prevAt) / 1000 : 0, next = {}, html = '';
+      for (var i = 0; i < d.streams.length; i++) {
+        var s = d.streams[i];
+        next[s.id] = s.sent;
+        var rate = dt > 0 && prevSent[s.id] != null ? (s.sent - prevSent[s.id]) / dt : null;
+        html += '<tr><td>' + esc(s.who) + '</td><td><div>' + esc(s.title || s.hash) + '</div><small class="muted">' + esc(s.file) + '</small></td>' +
+          '<td class="mono">' + esc(s.ip) + '</td><td class="num">' + bytes(s.sent) + '</td>' +
+          '<td class="num">' + (rate != null ? speed(Math.max(0, rate)) : '—') + '</td><td class="num">' + duration(s.seconds) + '</td></tr>';
+      }
+      prevSent = next; prevAt = now;
+      $('streams-body').innerHTML = html || '<tr><td colspan="6" class="empty">Никто не смотрит</td></tr>';
+      $('streams-sum').textContent = 'зрителей ' + d.viewers + ' · потоков ' + d.streams.length;
+    });
+  }
+
+  // ==================== трафик ====================
+  var trDays = 30, trMetric = 'http', traffic = null;
+  var METRIC_TITLE = { http: 'Отдано клиентам по дням', bt_down: 'Скачано из сети (BitTorrent) по дням', bt_up: 'Роздано в сеть (BitTorrent) по дням' };
+
+  function segClick(id, attr, fn) {
+    $(id).onclick = function (ev) {
+      var b = ev.target;
+      if (!b.getAttribute || !b.getAttribute(attr)) return;
+      var btns = this.getElementsByTagName('button');
+      for (var i = 0; i < btns.length; i++) btns[i].className = btns[i] === b ? 'on' : '';
+      fn(b.getAttribute(attr));
+    };
+  }
+  segClick('tr-days', 'data-d', function (v) { trDays = +v; loadTraffic(); });
+  segClick('tr-metric', 'data-m', function (v) { trMetric = v; if (traffic) renderTraffic(); });
+
+  function loadTraffic() {
+    request('GET', '/api/traffic?days=' + trDays, null, function (err, d) {
+      if (err || !d) { $('tr-stats').innerHTML = errHtml(err || 'нет ответа'); return; }
+      traffic = d;
+      renderTraffic();
+    });
+  }
+
+  // Шкала: «круглые» деления 1/2/5 × 10^n в тех единицах, в которых её подпишут (КБ, МБ, ГБ…)
+  function niceMax(v) {
+    if (v <= 0) return 1;
+    var unit = 1;
+    while (v / unit >= 1024) unit *= 1024;
+    var x = v / unit, p = Math.pow(10, Math.floor(Math.log(x) / Math.LN10)), n = x / p;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p * unit;
+  }
+
+  function renderTraffic() {
+    var d = traffic, s = d.server;
+    $('tr-stats').innerHTML =
+      stat('Клиентам сегодня', bytes(s.http_today)) + stat('Клиентам за 30 дней', bytes(s.http_30d)) + stat('Клиентам всего', bytes(s.http_total)) +
+      stat('Из сети за 30 дней ↓', bytes(s.bt_down_30d)) + stat('Из сети всего ↓', bytes(s.bt_down_total)) +
+      stat('В сеть за 30 дней ↑', bytes(s.bt_up_30d)) + stat('В сеть всего ↑', bytes(s.bt_up_total));
+    $('tr-chart-title').textContent = METRIC_TITLE[trMetric];
+
+    var rows = d.server.by_day, max = 0, sum = 0;
+    for (var i = 0; i < rows.length; i++) { max = Math.max(max, rows[i][trMetric]); sum += rows[i][trMetric]; }
+    var top = niceMax(max), html = '<div class="plot">';
+    for (var j = 0; j < rows.length; j++) {
+      var v = rows[j][trMetric], h = v > 0 ? Math.max(2, v * 100 / top) : 0;
+      var day = rows[j].day.split('-');
+      html += '<div class="col' + (v > 0 ? '' : ' zero') + '" data-tip="' + esc(day[2] + '.' + day[1] + ' — ' + bytes(v)) + '"><i style="height:' + h + '%"></i></div>';
+    }
+    html += '</div>';
+    // Линии сетки: половина и верх шкалы
+    html += '<div class="gridline" style="top:0"><span>' + esc(bytes(top)) + '</span></div><div class="gridline" style="top:90px"><span>' + esc(bytes(top / 2)) + '</span></div>';
+    function label(r) { var p = r.day.split('-'); return p[2] + '.' + p[1]; }
+    html += '<div class="axis"><span>' + label(rows[0]) + '</span><span>за ' + rows.length + ' ' + plural(rows.length, 'день', 'дня', 'дней') + ': ' + bytes(sum) + '</span><span>' + label(rows[rows.length - 1]) + '</span></div>';
+    $('tr-chart').innerHTML = max > 0 ? html : '<div class="empty">За этот период трафика нет</div>';
+
+    // Пользователи: доля за выбранный период
+    var urows = '', periodTotal = 0, per = [];
+    for (var k = 0; k < d.users.length; k++) {
+      var u = d.users[k], p = 0;
+      for (var q = 0; q < u.by_day.length; q++) p += u.by_day[q];
+      per.push(p); periodTotal += p;
+    }
+    for (var m = 0; m < d.users.length; m++) {
+      var uu = d.users[m];
+      urows += '<tr><td>' + esc(uu.login) + '</td><td class="num">' + bytes(uu.today) + '</td><td class="num">' + bytes(uu.d30) + '</td><td class="num">' + bytes(uu.total) + '</td>' +
+        '<td><div class="row" style="flex-wrap:nowrap"><div class="meter grow"><i style="width:' + pct(per[m], periodTotal) + '%"></i></div><span class="muted" style="font-size:12px;min-width:60px;text-align:right">' + bytes(per[m]) + '</span></div></td></tr>';
+    }
+    $('tr-users').innerHTML = urows || '<tr><td colspan="5" class="empty">Нет данных</td></tr>';
+    var r = '';
+    if (d.remote && d.remote.length) {
+      r = '<h2 style="margin-top:16px">Зрители от мастера</h2><p class="muted" style="margin-top:0">Этот сервер — узел: их прислал мастер, учётные записи — там.</p><table><thead><tr><th>Пользователь мастера</th><th class="num">Сегодня</th><th class="num">30 дней</th><th class="num">Всего</th></tr></thead><tbody>';
+      for (var z = 0; z < d.remote.length; z++) r += '<tr><td>' + esc(d.remote[z].login) + '</td><td class="num">' + bytes(d.remote[z].today) + '</td><td class="num">' + bytes(d.remote[z].d30) + '</td><td class="num">' + bytes(d.remote[z].total) + '</td></tr>';
+      r += '</tbody></table>';
+    }
+    $('tr-remote').innerHTML = r;
+  }
+  // Подсказка над столбцом: дата и объём
+  $('tr-chart').addEventListener('mousemove', function (ev) {
+    var el = ev.target;
+    while (el && el !== this && !el.getAttribute('data-tip')) el = el.parentNode;
+    if (el && el !== this) showTip(ev, el.getAttribute('data-tip'));
+    else $('tip').style.display = 'none';
+  });
+  $('tr-chart').addEventListener('mouseleave', function () { $('tip').style.display = 'none'; });
+
+  // ==================== балансировка ====================
+  var master = null, nodesDraft = null, nodesDirty = false;
+
+  function loadMaster() {
+    request('GET', '/api/master', null, function (err, m) {
+      if (err || !m) { $('ms-msg').innerHTML = errHtml(err || 'нет ответа'); return; }
+      master = m;
+      $('ms-key').textContent = m.node_key;
+      // Правки в полях — не затираем опросом
+      if (!nodesDirty) {
+        $('ms-enabled').checked = !!m.enabled;
+        $('ms-local').value = m.local_max;
+        nodesDraft = m.nodes.slice();
+      }
+      $('ms-now').textContent = 'Сейчас здесь зрителей: ' + m.viewers + (m.enabled ? ' из ' + m.local_max : '');
+      renderNodes();
+    });
+  }
+
+  function nodeState(n) {
+    var st = null;
+    for (var i = 0; master && i < master.nodes.length; i++) if (master.nodes[i].id === n.id) st = master.nodes[i];
+    if (!n.id || !st || st.online === undefined) return '<span class="muted">' + (master && master.enabled ? 'ещё не опрошен' : 'опрос — при включённой балансировке') + '</span>';
+    if (!st.online) return '<span class="dot bad"></span><span class="err-text">' + esc(st.error || 'недоступен') + '</span>';
+    return '<span class="dot"></span>зрителей ' + st.node_viewers + (st.pending ? ' (+' + st.pending + ')' : '') + ' из ' + st.max +
+      '<br><small class="muted">' + esc(st.version) + ' · ' + st.latency_ms + ' мс</small>';
+  }
+
+  function renderNodes() {
+    var body = $('ms-nodes'), focused = document.activeElement;
+    if (focused && body.contains(focused) && focused.tagName === 'INPUT' && focused.type !== 'checkbox') return;
+    var html = '';
+    for (var i = 0; i < (nodesDraft || []).length; i++) {
+      var n = nodesDraft[i];
+      html += '<tr data-i="' + i + '"><td>' + (i + 1) + '</td>' +
+        '<td><input data-n="name" value="' + esc(n.name) + '" placeholder="VPS 1"></td>' +
+        '<td><input data-n="url" value="' + esc(n.url) + '" placeholder="http://1.2.3.4:8090"></td>' +
+        '<td><input data-n="key" value="' + esc(n.key) + '" placeholder="ключ узла" class="mono"></td>' +
+        '<td class="num"><input type="number" data-n="max" min="0" value="' + n.max + '"></td>' +
+        '<td><input type="checkbox" data-n="enabled"' + (n.enabled ? ' checked' : '') + '></td>' +
+        '<td>' + nodeState(n) + '</td>' +
+        '<td><button class="btn small danger" data-del="' + i + '">Убрать</button></td></tr>';
+    }
+    body.innerHTML = html || '<tr><td colspan="8" class="empty">Узлов нет — добавьте другой MonoServer</td></tr>';
+  }
+
+  $('ms-nodes').oninput = $('ms-nodes').onchange = function (ev) {
+    var el = ev.target, row = el;
+    while (row && row !== this && !row.getAttribute('data-i')) row = row.parentNode;
+    if (!row || row === this || !el.getAttribute('data-n')) return;
+    var n = nodesDraft[+row.getAttribute('data-i')], k = el.getAttribute('data-n');
+    n[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value;
+    nodesDirty = true;
+  };
+  $('ms-nodes').onclick = function (ev) {
+    var i = ev.target.getAttribute && ev.target.getAttribute('data-del');
+    if (i == null) return;
+    nodesDraft.splice(+i, 1);
+    nodesDirty = true;
+    renderNodes();
+  };
+  $('ms-add').onclick = function () {
+    nodesDraft = nodesDraft || [];
+    nodesDraft.push({ id: '', name: '', url: '', key: '', max: 5, enabled: true });
+    nodesDirty = true;
+    renderNodes();
+  };
+  $('ms-enabled').onchange = $('ms-local').oninput = function () { nodesDirty = true; };
+  $('ms-save').onclick = function () {
+    $('ms-msg').textContent = 'Сохраняю…';
+    post('/api/master', { enabled: $('ms-enabled').checked, local_max: +$('ms-local').value, nodes: nodesDraft || [] }, function (err, m) {
+      if (err) { $('ms-msg').innerHTML = errHtml(err); return; }
+      nodesDirty = false;
+      $('ms-msg').textContent = 'Сохранено';
+      master = null;
+      loadMaster();
+    });
+  };
+  $('ms-key-copy').onclick = function () { copyText($('ms-key').textContent, this); };
+  $('ms-key-new').onclick = function () {
+    if (!confirm('Новый ключ узла? Мастер, который уже знает этот сервер, перестанет его опрашивать, пока ему не дадут новый ключ.')) return;
+    post('/api/master', { action: 'new_node_key' }, function (err) {
+      $('ms-msg').innerHTML = err ? errHtml(err) : '';
+      loadMaster();
+    });
+  };
+
   // ==================== цикл ====================
   var lastSlow = 0;
   function tick(now) {
     var t = Date.now();
-    if (now || t - lastSlow > 5000) { lastSlow = t; loadVersion(); if (tab !== 'cache' || now) loadTorrents(); }
+    var slow = now || t - lastSlow > 5000;
+    if (slow) { lastSlow = t; loadVersion(); if (tab !== 'cache' || now) loadTorrents(); }
     if (tab === 'torrents' && !now) loadTorrents();
     if (tab === 'cache' && $('cache-auto').checked) loadCache();
     if (tab === 'log') loadLog();
     if (tab === 'settings' && now) loadSettings();
+    if (tab === 'users') { if (now) loadAccess(); if (slow) loadUsers(); loadStreams(); }
+    if (tab === 'traffic' && slow) loadTraffic();
+    if (tab === 'master' && slow) loadMaster();
   }
 
   // #вкладка или #cache/<хэш> — ссылку можно сохранить или прислать
   function fromHash() {
     var h = (location.hash || '').replace(/^#/, '').split('/');
     if (h[0] === 'cache' && h[1] && h[1] !== cacheHash) { cacheHash = h[1]; cacheData = null; lastPeers = null; cacheSkeletonHash = null; }
-    showTab(['torrents', 'cache', 'log', 'settings'].indexOf(h[0]) >= 0 ? h[0] : 'torrents', h[0] === 'cache' ? cacheHash : null);
+    showTab(['torrents', 'cache', 'log', 'settings', 'users', 'traffic', 'master'].indexOf(h[0]) >= 0 ? h[0] : 'torrents', h[0] === 'cache' ? cacheHash : null);
   }
   window.addEventListener('hashchange', fromHash);
   fromHash();

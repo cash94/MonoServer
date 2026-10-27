@@ -5,6 +5,8 @@ MonoTorrent 3.0.2 (https://github.com/alanmcgovern/monotorrent) — библио
 uTP (service/Utp/) — перенос из master MonoTorrent (Copyright (C) 2026 Alan McGovern).
 Зависимости MonoTorrent — Mono.Nat, ReusableTasks (MIT, Alan McGovern),
 StandardSocketsHttpHandler (MIT, Tal Aloni), System.Memory (MIT, .NET Foundation).
+LiteDB 5.0.21 (https://github.com/litedb-org/LiteDB) — база MonoServer, bin/LiteDB.dll
+(MIT, Copyright (c) 2014-2022 Mauricio David) — та же лицензия MIT, текст ниже.
 
 MIT License
 

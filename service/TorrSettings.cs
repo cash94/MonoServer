@@ -30,6 +30,12 @@ namespace TorrStreamTorrServer
         // куска, не дожидаясь проверки хэша всего куска. Иначе при кусках по 8 МБ
         // плеер секундами не получал ни байта и обрывал запрос
         public bool ResponsiveMode = true;
+        // Внешний адрес, как PublicIPv4 у TorrServer: провайдер не даёт белого IP —
+        // порт пробрасывается с VPS (WireGuard + nginx), и трекерам, DHT и пирам надо
+        // сообщать адрес VPS. Можно «IP:порт» и имя хоста; пусто — не подменять.
+        // PublicPort — порт на VPS, если он не тот же, что PeersListenPort (0 — тот же)
+        public string PublicIPv4 = "";
+        public int PublicPort;
 
         // Нижние границы: 0 и меньше на телевизоре сломали бы окно читателя
         public const long MinCache = 8L << 20;
@@ -89,6 +95,8 @@ namespace TorrStreamTorrServer
                     case "UploadRateLimit": UploadRateLimit = (int)Clamp(o.Num(kv.Key) ?? 0, 0, int.MaxValue / 1024); break;
                     case "RetrackersMode": RetrackersMode = (int)Clamp(o.Num(kv.Key) ?? RetrackersMode, 0, 3); break;
                     case "ResponsiveMode": ResponsiveMode = o.Bool(kv.Key) ?? ResponsiveMode; break;
+                    case "PublicIPv4": PublicIPv4 = (o.Str(kv.Key) ?? "").Trim(); break;
+                    case "PublicPort": PublicPort = (int)Clamp(o.Num(kv.Key) ?? 0, 0, 65535); break;
                     case "TorrStreamSettingsVersion": break;
                     default: extra[kv.Key] = kv.Value; break;
                 }
@@ -96,6 +104,24 @@ namespace TorrStreamTorrServer
         }
 
         static long Clamp(long v, long min, long max) { return Math.Max(min, Math.Min(max, v)); }
+
+        /// <summary>
+        /// Внешний адрес из PublicIPv4 и PublicPort: хост (IP или имя) и порт; null — не задан.
+        /// Порт: из «хост:порт», иначе PublicPort, иначе порт пиров
+        /// </summary>
+        public (string host, int port)? PublicEndPoint()
+        {
+            string s = (PublicIPv4 ?? "").Trim();
+            if (s.Length == 0) return null;
+            int port = PublicPort > 0 ? PublicPort : PeersListenPort;
+            int colon = s.LastIndexOf(':');
+            if (colon > 0 && s.IndexOf(':') == colon && int.TryParse(s.Substring(colon + 1), out int p) && p > 0 && p < 65536)
+            {
+                port = p;
+                s = s.Substring(0, colon);
+            }
+            return (s, port);
+        }
 
         public string ToJson()
         {
@@ -114,6 +140,8 @@ namespace TorrStreamTorrServer
                 .Prop("UploadRateLimit", UploadRateLimit)
                 .Prop("RetrackersMode", RetrackersMode)
                 .Prop("ResponsiveMode", ResponsiveMode)
+                .Prop("PublicIPv4", PublicIPv4)
+                .Prop("PublicPort", PublicPort)
                 // Кэш у нас всегда в памяти — на диск не пишем
                 .Prop("UseDisk", false)
                 .Prop("TorrStreamSettingsVersion", SettingsVersion);

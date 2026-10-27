@@ -13,6 +13,8 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -275,6 +277,7 @@ namespace TorrStreamTorrServer
                 // Веб-сиды (url-list) — уже через 5 с, если пиры дают меньше 15 КБ/с:
                 // по умолчанию MonoTorrent ждёт минуту, а плеер столько не ждёт
                 WebSeedDelay = TimeSpan.FromSeconds(5),
+                ReportedListenEndPoints = ReportedEndPoints(),
             };
             // Подключение к пирам — своё (PeerConnector.cs): в netstandard2.0-сборке
             // MonoTorrent (Tizen) оно блокирующее и зависало на недоступных пирах.
@@ -357,11 +360,41 @@ namespace TorrStreamTorrServer
                     {
                         MaximumDownloadRate = Settings.DownloadRateLimit * 1024,
                         MaximumUploadRate = Settings.UploadRateLimit * 1024,
+                        ReportedListenEndPoints = ReportedEndPoints(),
                     };
                     _ = engine.UpdateSettingsAsync(b.ToSettings());
                 }
                 catch (Exception e) { log("настройки движка: " + e.Message); }
             }
+        }
+
+        /// <summary>Внешний адрес, который сообщать о себе (PublicIPv4/PublicPort), уже разрешённый в IPv4</summary>
+        IPEndPoint publicEndPoint;
+
+        // Внешний адрес (PublicIPv4/PublicPort) — для MonoTorrent: ReportedListenEndPoints
+        // идёт в анонсы трекерам (ip и port), в DHT (порт) и пирам в рукопожатии («p»).
+        // Имя хоста разрешаем здесь: MonoTorrent принимает только IPEndPoint
+        Dictionary<string, IPEndPoint> ReportedEndPoints()
+        {
+            var result = new Dictionary<string, IPEndPoint>();
+            var pub = Settings.PublicEndPoint();
+            IPEndPoint ep = null;
+            if (pub != null)
+            {
+                var (host, port) = pub.Value;
+                try
+                {
+                    var ip = IPAddress.TryParse(host, out var parsed) ? parsed
+                        : Dns.GetHostAddresses(host).FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+                    if (ip != null && ip.AddressFamily == AddressFamily.InterNetwork && port > 0) ep = new IPEndPoint(ip, port);
+                    else log("внешний адрес «" + Settings.PublicIPv4 + "»: нет IPv4 — не подменяем");
+                }
+                catch (Exception e) { log("внешний адрес «" + Settings.PublicIPv4 + "»: " + e.Message); }
+            }
+            if (ep != null) result["ipv4"] = ep;
+            if (!Equals(ep, publicEndPoint)) log(ep != null ? "внешний адрес для трекеров, DHT и пиров: " + ep : "внешний адрес не задан — сообщаем свой");
+            publicEndPoint = ep;
+            return result;
         }
 
         public void ResetSettings()
@@ -1670,10 +1703,40 @@ namespace TorrStreamTorrServer
         /// </summary>
         public static void CollectGarbage()
         {
+            // Два прохода: объекты с финализаторами (сокеты, хэшеры, их буферы) первая
+            // сборка только ставит в очередь финализации, а освобождает уже вторая —
+            // с одним проходом «Собрать мусор» приходилось жать несколько раз (200 → 90 МБ)
+            GC.Collect(2, GCCollectionMode.Forced, true, false);
+            GC.WaitForPendingFinalizers();
             try { System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce; } catch { }   // Mono — может не уметь
             try { GC.Collect(2, (GCCollectionMode)4, true, true); }
             catch { GC.Collect(2, GCCollectionMode.Forced, true, true); }
-            GC.WaitForPendingFinalizers();
+        }
+
+        /// <summary>IPv4 устройства в локальной сети — по ним служба доступна с телефона и в TorrStream</summary>
+        static List<string> LanAddresses()
+        {
+            var list = new List<string>();
+            try
+            {
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    // docker0, veth*, br-* и туннели — не то, по чему к нам придёт телефон
+                    string n = (ni.Name ?? "").ToLowerInvariant();
+                    if (n.StartsWith("docker") || n.StartsWith("veth") || n.StartsWith("br-") || n.StartsWith("virbr")) continue;
+                    foreach (var a in ni.GetIPProperties().UnicastAddresses)
+                    {
+                        var ip = a.Address;
+                        if (ip.AddressFamily != AddressFamily.InterNetwork || IPAddress.IsLoopback(ip)) continue;
+                        var b = ip.GetAddressBytes();
+                        if (b[0] == 169 && b[1] == 254) continue;   // без DHCP — адрес-заглушка
+                        if (!list.Contains(ip.ToString())) list.Add(ip.ToString());
+                    }
+                }
+            }
+            catch { }
+            return list;
         }
 
         /// <summary>collect — сначала полная сборка мусора: что останется в gc_mb, то и правда занято</summary>
@@ -1708,6 +1771,10 @@ namespace TorrStreamTorrServer
                 .Prop("runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription)
                 .Prop("arch", System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString())
                 .Prop("port", httpPort).Prop("peers_port", Settings.PeersListenPort)
+                .Prop("public", publicEndPoint != null ? publicEndPoint.ToString() : "");
+            w.Key("lan_ips").Arr();
+            foreach (var ip in LanAddresses()) w.Val(ip);
+            w.EndArr()
                 .Prop("cache_mb", Settings.CacheSize >> 20).Prop("memory_mb", filled >> 20)
                 // Куча .NET: кэш кусков (byte[]) плюс всё прочее, вместе с ещё не собранным мусором
                 .Prop("gc_mb", gc >> 20)

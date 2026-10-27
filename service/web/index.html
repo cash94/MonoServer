@@ -408,6 +408,8 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       ['DHT', v.dht || '—'], ['Ретрекеры', v.trackers || '—'],
       ['Порты', 'HTTP ' + v.port + ' · пиры ' + v.peers_port], ['Работает', duration(v.uptime_s)]
     ];
+    if (v.lan_ips && v.lan_ips.length) rows.splice(8, 0, ['В локальной сети', v.lan_ips.join(', ')]);
+    if (v['public']) rows.splice(8, 0, ['Внешний адрес', v['public']]);
     var html = '';
     for (var i = 0; i < rows.length; i++) html += '<dt>' + esc(rows[i][0]) + '</dt><dd>' + esc(rows[i][1]) + '</dd>';
     if (!v.evict) html += '<dt class="err-text">evict</dt><dd class="err-text" title="Вытесненные куски не скачаются заново при перемотке назад">недоступен</dd>';
@@ -956,7 +958,8 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     ConnectionsLimit: 'Пиров на торрент', TorrentDisconnectTimeout: 'Закрыть без читателей, с', PeersListenPort: 'Порт пиров',
     EnableDHT: 'DHT', EnableUPNP: 'UPnP', EnableUTP: 'uTP (пиры по UDP)', DownloadRateLimit: 'Ограничение ↓, КБ/с', UploadRateLimit: 'Ограничение ↑, КБ/с',
     RetrackersMode: 'Ретрекеры (0 — нет, 1 — добавлять)',
-    ResponsiveMode: 'Отдавать блоки до проверки куска'
+    ResponsiveMode: 'Отдавать блоки до проверки куска',
+    PublicIPv4: 'Внешний адрес (IP или хост[:порт])', PublicPort: 'Внешний порт (0 — как порт пиров)'
   };
   function loadSettings() {
     post('/settings', { action: 'get' }, function (err, s) {

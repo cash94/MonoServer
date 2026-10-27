@@ -8,10 +8,13 @@
   Страница пакета MonoServer. Служба (online.torrstream.torrserver)
   и так стартует вместе с телевизором; здесь — запустить её вручную (после
   установки, если система её выгрузила) и показать, работает ли она и по
-  какому адресу её указать в TorrStream или Lampa. Ответ службы — по IP
-  телевизора: до localhost страница на ТВ не достаёт. «Назад» — выход.
+  какому адресу её указать в TorrStream или Lampa. Адрес — IP телевизора:
+  127.0.0.1 работает только на самом телевизоре. IP — из webapis.network
+  (нужен webapis.js), иначе из /version службы (lan_ips).
+  OK на «Поддержать разработчика» — QR-код, «Назад» — закрыть его или выйти.
   ES5: Tizen 3–5 — движок Chrome 47–69.
 -->
+<script src="$WEBAPIS/webapis/webapis.js"></script>
 <style>
   html, body { margin: 0; height: 100%; background: #0b0b0f; color: #fff; overflow: hidden; }
   body { font-family: "SamsungOne", Roboto, Arial, sans-serif; }
@@ -22,7 +25,16 @@
   .ok { color: #5ad17a; } .bad { color: #ff6a6a; }
   .addr { font-size: 40px; color: #fff; margin-top: 24px; min-height: 48px; }
   .detail { font-size: 22px; color: #6b6b78; margin-top: 18px; word-wrap: break-word; }
+  .support { display: inline-block; margin-top: 36px; padding: 18px 44px; font-size: 30px; color: #fff; background: #23232c; border: 3px solid #3a3a46; border-radius: 16px; }
+  .support.focused { background: #ff8c00; border-color: #ffb050; color: #111; }
   .hint { font-size: 22px; color: #6b6b78; margin-top: 40px; }
+  #qr { display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(5, 5, 8, 0.94); text-align: center; }
+  #qr.on { display: block; }
+  #qr .card { position: absolute; top: 50%; left: 50%; width: 700px; margin-left: -350px; -webkit-transform: translateY(-50%); transform: translateY(-50%); }
+  #qr .paper { background: #fff; border-radius: 24px; padding: 30px; }
+  #qr img { display: block; width: 640px; height: 640px; }
+  #qr .title { font-size: 36px; margin: 0 0 24px; }
+  #qr .note { font-size: 24px; color: #8b8b98; margin-top: 24px; }
 </style>
 </head>
 <body>
@@ -31,16 +43,27 @@
   <p class="status" id="status">Запускаю службу…</p>
   <p class="addr" id="addr"></p>
   <p class="detail" id="detail"></p>
+  <div class="support focused" id="support">Поддержать разработчика</div>
   <p class="hint">MonoServer — TorrServer на телевизоре: работает в фоне и запускается вместе с ним.<br>
     В TorrStream включите «Использовать TorrServer, установленный на этом устройстве» — адрес подставится сам.<br>«Назад» — выход</p>
+</div>
+<div id="qr">
+  <div class="card">
+    <p class="title">Спасибо за поддержку!</p>
+    <div class="paper"><img id="qr-img" alt=""></div>
+    <p class="note" id="qr-note">Наведите камеру телефона на код · «Назад» — закрыть</p>
+  </div>
 </div>
 <script>
 (function () {
   var SERVICE = 'online.torrstream.torrserver';
   var PORT = 8090;
+  var QR_URL = 'https://cash94.github.io/msx/qr-code.png';
   var statusEl = document.getElementById('status');
   var addrEl = document.getElementById('addr');
   var detailEl = document.getElementById('detail');
+  var qrEl = document.getElementById('qr');
+  var qrImg = document.getElementById('qr-img');
 
   function show(text, cls, addr, detail) {
     statusEl.textContent = text;
@@ -53,16 +76,51 @@
     try { tizen.application.getCurrentApplication().exit(); } catch (e) { try { window.close(); } catch (e2) { } }
   }
 
+  // QR-код — с сайта: грузим при первом открытии, без сети — подсказка
+  function openQr() {
+    if (!qrImg.getAttribute('src')) {
+      qrImg.onerror = function () { document.getElementById('qr-note').textContent = 'Не удалось загрузить код — нет интернета? «Назад» — закрыть'; };
+      qrImg.setAttribute('src', QR_URL);
+    }
+    qrEl.className = 'on';
+  }
+  function qrOpen() { return qrEl.className === 'on'; }
+
+  // Пульт: OK — QR-код (единственная кнопка, фокус всегда на ней), «Назад» — закрыть его или выйти
   document.addEventListener('keydown', function (e) {
-    if (e.keyCode === 10009 || e.keyCode === 27 || e.keyCode === 13) { e.preventDefault(); exitApp(); }
+    var k = e.keyCode;
+    if (k === 10009 || k === 27 || k === 8) {
+      e.preventDefault();
+      if (qrOpen()) qrEl.className = ''; else exitApp();
+    } else if (k === 13) {
+      e.preventDefault();
+      if (qrOpen()) qrEl.className = ''; else openQr();
+    }
   });
+  document.getElementById('support').onclick = openQr;
+  qrEl.onclick = function () { qrEl.className = ''; };
+
+  function tvIp() {
+    try { if (window.webapis && webapis.network && webapis.network.getIp) return webapis.network.getIp() || ''; } catch (e) { }
+    return '';
+  }
 
   function bases() {
-    var list = [], ip = '';
-    try { if (window.webapis && webapis.network && webapis.network.getIp) ip = webapis.network.getIp() || ''; } catch (e) { }
+    var list = [], ip = tvIp();
     if (ip) list.push('http://' + ip + ':' + PORT);
     list.push('http://127.0.0.1:' + PORT);
     return list;
+  }
+
+  // Что показать: IP телевизора (от webapis или от службы), 127.0.0.1 — только если других нет
+  function shownAddr(base, d) {
+    var ip = tvIp();
+    if (!ip && d && d.lan_ips && d.lan_ips.length) ip = d.lan_ips[0];
+    if (!ip) {
+      var host = base.replace(/^http:\/\//, '').split(':')[0];
+      if (host !== '127.0.0.1') ip = host;
+    }
+    return ip ? ip + ':' + PORT : '127.0.0.1:' + PORT + ' (IP телевизора не определился)';
   }
 
   // /version по очереди по адресам; служба после запуска поднимается не сразу —
@@ -85,11 +143,11 @@
           try { d = JSON.parse(x.responseText); } catch (e) { }
           if (!d) { next(); return; }
           if (d.name !== 'MonoServer' && d.name !== 'TorrStream TorrServer') {
-            show('На порту 8090 — другой TorrServer', 'ok', base.replace(/^http:\/\//, ''), 'Им и пользуйтесь; эта служба не запустилась, чтобы ему не мешать');
+            show('На порту 8090 — другой TorrServer', 'ok', shownAddr(base, null), 'Им и пользуйтесь; эта служба не запустилась, чтобы ему не мешать');
             return;
           }
           if (d.error) { show('Служба запущена, но торрент-движок нет', 'bad', '', d.error); return; }
-          show('MonoServer работает', 'ok', base.replace(/^http:\/\//, ''),
+          show('MonoServer работает', 'ok', shownAddr(base, d),
             d.engine + ' · ' + d.runtime + ' · кэш ' + d.cache_mb + ' МБ · торрентов ' + d.torrents);
         };
         x.onerror = next;

@@ -214,10 +214,15 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
 .ntable input[type=text], .ntable input:not([type]) { width: 100%; min-width: 120px; }
 .ntable input[type=number] { width: 70px; }
 .dot.off { background: var(--muted); box-shadow: none; }
-/* Семь вкладок с длинными подписями шапка вмещает только на широком экране */
-@media (max-width: 1360px) {
-  nav .l-long { display: none; }
-  nav .l-short { display: inline; }
+/* Вкладки не прокручиваются за край: не помещаются — fitNav() сокращает
+   подписи (nav.short), не помещаются и так — остаются значки (nav.icons) */
+@media (min-width: 701px) {
+  nav { flex: 0 0 auto; overflow: visible; }
+  .status { min-width: 0; }
+  nav.short .l-long { display: none; }
+  nav.short .l-short { display: inline; }
+  nav.icons .l-long, nav.icons .l-short { display: none; }
+  nav.icons button { padding: 6px 9px; }
 }
 @media (max-width: 1000px) {
   .info-grid { grid-template-columns: 1fr; }
@@ -279,7 +284,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       <button data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="l-long">Настройки</span><span class="l-short">Настр.</span></button>
       <button data-tab="users"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.3-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.8c2 .7 3.2 2.4 3.5 5.2"/></svg><span class="l-long">Пользователи</span><span class="l-short">Польз.</span></button>
       <button data-tab="traffic"><svg class="i" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span class="l-long">Трафик</span><span class="l-short">Трафик</span></button>
-      <button data-tab="master"><svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5" rx="1.2"/><rect x="2.5" y="16" width="6" height="5" rx="1.2"/><rect x="15.5" y="16" width="6" height="5" rx="1.2"/><path d="M12 8v4M5.5 16v-2.5h13V16"/></svg><span class="l-long">Балансировка</span><span class="l-short">Узлы</span></button>
+      <button data-tab="master"><svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5" rx="1.2"/><rect x="2.5" y="16" width="6" height="5" rx="1.2"/><rect x="15.5" y="16" width="6" height="5" rx="1.2"/><path d="M12 8v4M5.5 16v-2.5h13V16"/></svg><span class="l-long">Мастер-сервер</span><span class="l-short">Мастер</span></button>
     </nav>
     <div class="status">
       <span id="ver-short">загрузка…</span>
@@ -443,11 +448,12 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     </div>
   </section>
 
-  <!-- ==================== Балансировка ==================== -->
+  <!-- ==================== Мастер-сервер (балансировка) ==================== -->
   <section id="tab-master">
     <div class="card">
-      <h2>Мастер-сервер</h2>
-      <p class="muted" style="margin-top:0">Когда здесь смотрят уже столько человек, сколько указано, новых зрителей сервер перенаправляет (HTTP 302) на узел, где есть место. Кто уже смотрит — остаётся, где смотрел. На узлах нет мест — смотрит здесь.</p>
+      <h2>Этот сервер — мастер (главный)</h2>
+      <p class="muted" style="margin-top:0">Когда здесь смотрят уже столько человек, сколько указано, новых зрителей сервер перенаправляет (HTTP 302) на узел, где есть место. Кто уже смотрит — остаётся, где смотрел. На узлах нет мест — смотрит здесь.<br>
+        Как настроить: на каждом подчинённом сервере (узле) откройте эту же вкладку и скопируйте его ключ из блока ниже → здесь «Добавить узел»: адрес узла, каким его видят зрители (например <span class="mono">http://1.2.3.4:8090</span>), и этот ключ → включите «Перенаправлять на узлы» → «Сохранить».</p>
       <label class="switch-row"><input type="checkbox" id="ms-enabled"><span><b>Перенаправлять на узлы</b><small id="ms-now">—</small></span></label>
       <div class="row" style="margin-top:10px">
         <label class="muted">Зрителей здесь, не больше <input type="number" id="ms-local" min="0" max="10000" style="width:80px"></label>
@@ -465,7 +471,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       </div>
     </div>
     <div class="card">
-      <h2>Этот сервер как узел</h2>
+      <h2>Этот сервер — узел (подчинённый)</h2>
       <p class="muted" style="margin-top:0">Чтобы мастер отправлял сюда зрителей, добавьте на мастере узел с адресом этого сервера и этим ключом. С ним мастер узнаёт, сколько здесь смотрят, и подписывает перенаправления — пользователи мастера смотрят здесь без своей учётной записи.</p>
       <div class="tok" id="ms-key">—</div>
       <div class="row">
@@ -539,7 +545,26 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
   }
   for (var n = 0; n < navButtons.length; n++) {
     navButtons[n].onclick = function () { showTab(this.getAttribute('data-tab'), this.getAttribute('data-tab') === 'cache' ? cacheHash : null); };
+    // Подсказка с полным названием — на случай, когда остались одни значки
+    var longLabel = navButtons[n].querySelector('.l-long');
+    if (longLabel) navButtons[n].title = longLabel.textContent;
   }
+
+  // Шапка в одну строку: вкладки с полными подписями, не помещаются — с
+  // короткими, и так тесно — одни значки. Раньше лишние вкладки уезжали за край
+  // строки вкладок (прокрутка скрыта), и «Мастер-сервер» было не найти.
+  // На телефоне (≤ 700 px) вкладки внизу — там своя раскладка
+  function fitNav() {
+    var nav = $('nav'), top = nav.parentNode;
+    var modes = ['', 'short', 'icons'];
+    if (window.innerWidth <= 700) { nav.className = ''; return; }
+    for (var i = 0; i < modes.length; i++) {
+      nav.className = modes[i];
+      if (top.scrollWidth <= top.clientWidth + 1) return;
+    }
+  }
+  var fitTimer = null;
+  window.addEventListener('resize', function () { clearTimeout(fitTimer); fitTimer = setTimeout(fitNav, 100); });
 
   // ==================== версия ====================
   function mb(n) { return n == null || n < 0 ? '—' : n >= 1024 ? (n / 1024).toFixed(2) + ' ГБ' : n + ' МБ'; }
@@ -1639,6 +1664,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     showTab(['torrents', 'cache', 'log', 'settings', 'users', 'traffic', 'master'].indexOf(h[0]) >= 0 ? h[0] : 'torrents', h[0] === 'cache' ? cacheHash : null);
   }
   window.addEventListener('hashchange', fromHash);
+  fitNav();
   fromHash();
   setInterval(function () { if (!document.hidden) tick(false); }, 1000);
 })();

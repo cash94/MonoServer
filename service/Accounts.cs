@@ -185,14 +185,32 @@ namespace TorrStreamTorrServer
         // Узел: ключ, которым мастер подписывает перенаправления и опрашивает состояние
         public string NodeKey = "";
 
-        // Код первого входа: пока у admin нет пароля
+        // Код первого входа: пока у admin нет пароля. Он и в файле setup-code.txt
+        // рядом с базой — журнал не везде под рукой (служба Linux без
+        // сохранённого журнала: monoserver.sh code его покажет); на Tizen журнала
+        // не видно вовсе — там код показывает страница приложения (/api/setup/code)
         string setupCode;
         int setupFails;
+        readonly string codePath;
 
         public Accounts(string dataDir, Action<string> log)
         {
             path = Path.Combine(dataDir, "monoserver.db");
+            codePath = Path.Combine(dataDir, "setup-code.txt");
             this.log = log ?? (_ => { });
+        }
+
+        /// <summary>Код первого входа, пока пароль admin не задан; иначе null</summary>
+        public string SetupCode { get { lock (sync) return NeedsSetup ? setupCode : null; } }
+
+        void WriteCodeFile(string code)
+        {
+            try
+            {
+                if (code != null) File.WriteAllText(codePath, code + "\n");
+                else if (File.Exists(codePath)) File.Delete(codePath);
+            }
+            catch (Exception e) { log("setup-code.txt: " + e.Message); }
         }
 
         public static long UnixNow() { return DateTimeOffset.UtcNow.ToUnixTimeSeconds(); }
@@ -627,7 +645,7 @@ namespace TorrStreamTorrServer
         {
             lock (sync)
             {
-                if (!NeedsSetup) { setupCode = null; return; }
+                if (!NeedsSetup) { setupCode = null; WriteCodeFile(null); return; }
                 // 8 цифр, группами: его переписывают с экрана журнала
                 var b = new byte[8];
                 lock (Rng) Rng.GetBytes(b);
@@ -635,6 +653,7 @@ namespace TorrStreamTorrServer
                 for (int i = 0; i < 8; i++) { if (i == 4) sb.Append('-'); sb.Append((char)('0' + b[i] % 10)); }
                 setupCode = sb.ToString();
                 setupFails = 0;
+                WriteCodeFile(setupCode);
             }
             log("Первый вход в веб-интерфейс: код " + setupCode + " — введите его на странице службы и задайте пароль пользователя admin");
         }
@@ -664,6 +683,7 @@ namespace TorrStreamTorrServer
                 if (!NeedsSetup) return "пароль уже задан";
                 SetPassword(Admin, password);
                 setupCode = null;
+                WriteCodeFile(null);
                 PutUser(Admin);
             }
             log("Пароль admin задан — веб-интерфейс открыт только с ним");

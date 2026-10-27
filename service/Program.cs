@@ -20,7 +20,8 @@ namespace TorrStreamTorrServer
         protected override void OnCreate()
         {
             base.OnCreate();
-            host = new TorrServerHost();
+            // Журнал службы на телевизоре не прочитать — код первого входа покажет страница пакета (app/)
+            host = new TorrServerHost { LocalSetupCode = true };
             try
             {
                 host.Start(Application.Current.DirectoryInfo.Data, TorrServerHost.DefaultPort, msg => Tizen.Log.Info(LogTag, msg));

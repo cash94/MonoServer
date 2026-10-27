@@ -15,6 +15,11 @@ namespace TorrStreamTorrServer
         public TorrEngine Engine { get; private set; }
         public Accounts Accounts { get; private set; }
         public HttpApi Api { get; private set; }
+        /// <summary>
+        /// Код первого входа показывает страница приложения на этом устройстве
+        /// (/api/setup/code) — для Tizen, где журнала службы не видно
+        /// </summary>
+        public bool LocalSetupCode;
         Timer trafficTimer;
         long btDownSeen, btUpSeen;
 
@@ -32,7 +37,7 @@ namespace TorrStreamTorrServer
             Accounts = new Accounts(dataDir, log);
             // HTTP — первым: занят порт — движок и не нужен, и базу второй экземпляр не трогает
             string localKey = Accounts.RandomHex(16);
-            Api = new HttpApi(Engine, Accounts, port, log, Journal, localKey);
+            Api = new HttpApi(Engine, Accounts, port, log, Journal, localKey) { LocalSetupCode = LocalSetupCode };
             Api.Start();
             WriteLocalKey(dataDir, localKey, log);
             Accounts.Load();

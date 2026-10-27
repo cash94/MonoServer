@@ -1876,6 +1876,10 @@ namespace TorrStreamTorrServer
                     .Prop("engine", "MonoTorrent " + EngineVersion())
                     .Prop("runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription)
                     .Prop("port", httpPort).Prop("cache_mb", Settings.CacheSize >> 20);
+                // Страница Tizen показывает по ним IP телевизора, если webapis его не дал
+                w.Key("lan_ips").Arr();
+                foreach (var ip in LanAddresses()) w.Val(ip);
+                w.EndArr();
                 lock (sync) w.Prop("torrents", entries.Count);
                 if (StartError != null) w.Prop("error", StartError);
                 w.EndObj();

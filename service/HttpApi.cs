@@ -41,6 +41,8 @@ namespace TorrStreamTorrServer
         readonly LogRing journal;
         readonly string localKey;
         public readonly StreamRegistry Streams = new StreamRegistry();
+        /// <summary>Отдавать код первого входа странице приложения на этом устройстве (Tizen)</summary>
+        public bool LocalSetupCode;
         public readonly Balancer Balancer;
         TcpListener listener;
         int connections;
@@ -672,13 +674,54 @@ namespace TorrStreamTorrServer
 
             if (req.Has("preload"))
             {
-                var t = System.Diagnostics.Stopwatch.StartNew();
-                log(e.Hash + ": предзагрузка файла " + stat.Id + ", " + Remote(client));
-                bool ok = engine.Preload(e, stat, () => Gone(client));
-                log(e.Hash + ": предзагрузка " + (ok ? "готова" : "прервана") + " за " + (t.ElapsedMilliseconds / 1000.0).ToString("0.0") + " с, " + Mb(e.PreloadedBytes) + " из " + Mb(e.PreloadSize));
+                // Ждём конца предзагрузки, пока клиент на связи; ушёл — она идёт
+                // дальше, как у TorrServer. Lampa так и делает: ?preload с таймаутом
+                // 2 с, дальше раз в секунду ?stat (preloaded_bytes / preload_size) до
+                // 95 %. Раньше разрыв соединения прерывал предзагрузку, и Lampa
+                // ждала прогресса, которого не было
+                var job = StartPreload(e, stat, Remote(client));
+                while (!job.Wait(500))
+                    if (Gone(client)) return false;
                 return SendJson(s, req, Status(c, e));
             }
             return ServeFile(client, s, req, c, e, stat);
+        }
+
+        // Идущие предзагрузки: хэш → (номер файла, задача). Повторный ?preload того
+        // же файла ждёт ту же, а не запускает вторую поверх
+        readonly Dictionary<string, KeyValuePair<int, System.Threading.Tasks.Task<bool>>> preloads = new Dictionary<string, KeyValuePair<int, System.Threading.Tasks.Task<bool>>>();
+        const long PreloadStallMs = 180000;
+
+        System.Threading.Tasks.Task<bool> StartPreload(TorrEntry e, FileStat stat, string who)
+        {
+            lock (preloads)
+            {
+                if (preloads.TryGetValue(e.Hash, out var running) && running.Key == stat.Id && !running.Value.IsCompleted) return running.Value;
+                // Без клиента не бесконечно: пиров нет — 3 минуты без прогресса, и
+                // хватит (торрент иначе не закроется). Закрыли торрент — читатели
+                // предзагрузки закрываются сами (Read → −1)
+                long lastBytes = -1, lastChange = Ms();
+                Func<bool> stalled = () =>
+                {
+                    long b = e.PreloadedBytes;
+                    if (b != lastBytes) { lastBytes = b; lastChange = Ms(); return false; }
+                    return Ms() - lastChange > PreloadStallMs;
+                };
+                // Свой поток (LongRunning): предзагрузка ждёт куски минутами, а пул нужен MonoTorrent
+                var job = System.Threading.Tasks.Task.Factory.StartNew(() =>
+                {
+                    var t = System.Diagnostics.Stopwatch.StartNew();
+                    log(e.Hash + ": предзагрузка файла " + stat.Id + ", " + who);
+                    bool ok = false;
+                    try { ok = engine.Preload(e, stat, stalled); }
+                    catch (Exception ex) { log(e.Hash + ": предзагрузка — " + ex.Message); }
+                    log(e.Hash + ": предзагрузка " + (ok ? "готова" : "прервана") + " за " + (t.ElapsedMilliseconds / 1000.0).ToString("0.0") + " с, " + Mb(e.PreloadedBytes) + " из " + Mb(e.PreloadSize));
+                    return ok;
+                }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.LongRunning, System.Threading.Tasks.TaskScheduler.Default);
+                preloads[e.Hash] = new KeyValuePair<int, System.Threading.Tasks.Task<bool>>(stat.Id, job);
+                foreach (var done in preloads.Where(kv => kv.Value.Value.IsCompleted && kv.Key != e.Hash).Select(kv => kv.Key).ToList()) preloads.Remove(done);
+                return job;
+            }
         }
 
         // /play/<хэш>/<номер>

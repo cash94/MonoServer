@@ -6,6 +6,7 @@
 #   ./monoserver.sh uninstall   — остановить и удалить службу (данные остаются)
 #   ./monoserver.sh status      — состояние службы и адрес
 #   ./monoserver.sh log         — журнал службы (Ctrl+C — выход)
+#   ./monoserver.sh code        — код первого входа в веб-интерфейс (пока пароль admin не задан)
 #   ./monoserver.sh run         — запустить в этом терминале (Ctrl+C — стоп)
 #   ./monoserver.sh             — то же, что install
 #
@@ -35,12 +36,12 @@ ASK=1
 SYSTEM=0
 CMD="install"
 
-usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
 die() { echo "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        install|update|uninstall|status|log|run) CMD="$1"; shift ;;
+        install|update|uninstall|status|log|code|run) CMD="$1"; shift ;;
         -p|--port) PORT="${2:-}"; ASK=0; shift 2 ;;
         -d|--data) DATA="${2:-}"; shift 2 ;;
         -y|--yes) ASK=0; shift ;;
@@ -331,6 +332,30 @@ cmd_status() {
 
 cmd_log() { JCTL -f -n 100; }
 
+# Код первого входа: служба кладёт его в setup-code.txt в каталоге данных (и в
+# журнал, но журнал пользовательской службы сохраняется не везде). Каталог —
+# из ExecStart установленной службы (её или системной), иначе по умолчанию
+cmd_code() {
+    local data="" unit f p
+    for unit in "$UNIT_PATH" "/etc/systemd/system/$NAME.service" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$NAME.service"; do
+        [ -f "$unit" ] || continue
+        data="$(sed -n 's/^ExecStart=.*"[[:space:]][[:space:]]*[0-9][0-9]*[[:space:]][[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$unit" | head -n 1)"
+        [ -n "$data" ] && break
+    done
+    [ -n "$data" ] || data="$DATA"
+    f="$data/setup-code.txt"
+    p="$(cat "$CONF" 2>/dev/null)"
+    [ -n "$p" ] || p="$DEFAULT_PORT"
+    if [ -f "$f" ] || $SUDO test -f "$f" 2>/dev/null; then
+        echo "Код первого входа: $($SUDO cat "$f" | tr -d '\r\n')"
+        echo "Откройте веб-интерфейс, введите код и задайте пароль пользователя admin:"
+        print_addresses "$p"
+    else
+        echo "Кода нет ($f): пароль admin уже задан — входите им, или служба ещё не запускалась."
+        echo "Служба до 1.0.27 код в файл не пишет — он только в журнале: $0 log"
+    fi
+}
+
 cmd_run() {
     ensure_binary
     choose_port
@@ -347,5 +372,6 @@ case "$CMD" in
     uninstall) cmd_uninstall ;;
     status) cmd_status ;;
     log) cmd_log ;;
+    code) cmd_code ;;
     run) cmd_run ;;
 esac

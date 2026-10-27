@@ -28,6 +28,13 @@
   .support { display: inline-block; margin-top: 36px; padding: 18px 44px; font-size: 30px; color: #fff; background: #23232c; border: 3px solid #3a3a46; border-radius: 16px; }
   .support.focused { background: #ff8c00; border-color: #ffb050; color: #111; }
   .hint { font-size: 22px; color: #6b6b78; margin-top: 40px; }
+  /* Код первого входа в веб-интерфейс — пока пароль admin не задан */
+  .setup { display: none; margin: 30px auto 0; width: 980px; padding: 22px 30px; background: #1a1a22; border: 2px solid #ff8c00; border-radius: 18px; }
+  .setup.on { display: block; }
+  .setup .t { font-size: 26px; color: #c8c8d2; margin: 0; }
+  .setup .code { font-size: 72px; font-weight: bold; letter-spacing: 8px; color: #ff8c00; margin: 8px 0; font-family: "Courier New", monospace; }
+  .setup .how { font-size: 24px; color: #8b8b98; margin: 0; }
+  .setup .how b { color: #fff; }
   #qr { display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(5, 5, 8, 0.94); text-align: center; }
   #qr.on { display: block; }
   #qr .card { position: absolute; top: 50%; left: 50%; width: 700px; margin-left: -350px; -webkit-transform: translateY(-50%); transform: translateY(-50%); }
@@ -43,8 +50,13 @@
   <p class="status" id="status">Запускаю службу…</p>
   <p class="addr" id="addr"></p>
   <p class="detail" id="detail"></p>
+  <div class="setup" id="setup">
+    <p class="t">Первый вход в веб-интерфейс сервера</p>
+    <p class="code" id="setup-code"></p>
+    <p class="how">Откройте <b id="setup-url"></b> на телефоне или компьютере, введите этот код и задайте пароль администратора</p>
+  </div>
   <div class="support focused" id="support">Поддержать разработчика</div>
-  <p class="hint">MonoServer — TorrServer на телевизоре: работает в фоне и запускается вместе с ним.<br>
+  <p class="hint">MonoServer на телевизоре: работает в фоне и запускается вместе с ним.<br>
     В TorrStream включите «Использовать TorrServer, установленный на этом устройстве» — адрес подставится сам.<br>«Назад» — выход</p>
 </div>
 <div id="qr">
@@ -123,6 +135,38 @@
     return ip ? ip + ':' + PORT : '127.0.0.1:' + PORT + ' (IP телевизора не определился)';
   }
 
+  // Код первого входа в веб-интерфейс: журнала службы на телевизоре не видно,
+  // поэтому код показываем здесь, пока пароль admin не задан. Служба отдаёт его
+  // только запросу с самого телевизора — поэтому 127.0.0.1, а не IP. Раз в 5 с:
+  // после пяти неверных попыток код меняется, после пароля — блок скрывается
+  var setupTimer = null;
+  function watchSetupCode(addr) {
+    var box = document.getElementById('setup');
+    document.getElementById('setup-url').textContent = 'http://' + addr.split(' ')[0] + '/';
+    var poll = function () {
+      var x = new XMLHttpRequest();
+      try {
+        x.open('GET', 'http://127.0.0.1:' + PORT + '/api/setup/code?_=' + Date.now(), true);
+        x.timeout = 4000;
+        x.onload = function () {
+          var d = null;
+          try { d = JSON.parse(x.responseText); } catch (e) { }
+          // 404 — служба до 1.0.27 или пароль не нужен: блока нет
+          if (x.status !== 200 || !d || !d.needs_setup || !d.code) { box.className = 'setup'; if (!d || !d.needs_setup) return; }
+          else {
+            document.getElementById('setup-code').textContent = d.code;
+            box.className = 'setup on';
+          }
+          setupTimer = setTimeout(poll, 5000);
+        };
+        x.onerror = x.ontimeout = function () { setupTimer = setTimeout(poll, 5000); };
+        x.send();
+      } catch (e) { }
+    };
+    if (setupTimer) clearTimeout(setupTimer);
+    poll();
+  }
+
   // /version по очереди по адресам; служба после запуска поднимается не сразу —
   // спрашиваем до 30 раз раз в секунду
   var tries = 0;
@@ -149,6 +193,7 @@
           if (d.error) { show('Служба запущена, но торрент-движок нет', 'bad', '', d.error); return; }
           show('MonoServer работает', 'ok', shownAddr(base, d),
             d.engine + ' · ' + d.runtime + ' · кэш ' + d.cache_mb + ' МБ · торрентов ' + d.torrents);
+          watchSetupCode(shownAddr(base, d));
         };
         x.onerror = next;
         x.ontimeout = next;

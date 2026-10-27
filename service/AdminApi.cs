@@ -58,6 +58,7 @@ namespace TorrStreamTorrServer
                     accounts.EndSession(Cookie(req, "ms_session"));
                     return SendJson(s, req, 200, "{\"ok\":true}", ClearCookie);
                 case "/api/setup": return Setup(s, req, c);
+                case "/api/setup/code": return SetupCodeForApp(client, s, req);
                 case "/api/node/status": return NodeStatus(s, req);
                 case "/api/me":
                     if (c.User == null) return Unauthorized(s, req, c);
@@ -184,6 +185,29 @@ namespace TorrStreamTorrServer
             }
             var ses = accounts.NewSession(accounts.Admin, c.Ip);
             return SendJson(s, req, 200, "{\"ok\":true}", SessionCookie(ses));
+        }
+
+        /// <summary>
+        /// Код первого входа — странице приложения на этом же устройстве (Tizen:
+        /// журнал службы на телевизоре не прочитать). Только когда сборка это
+        /// разрешила (LocalSetupCode — Program.cs на Tizen), запрос пришёл прямо
+        /// с 127.0.0.1, а не через прокси (за nginx на VPS «loopback» — любой из
+        /// интернета), и не со страницы сайта: у пакета приложения origin file://
+        /// (или его нет), а сайт, открытый в браузере телевизора, иначе прочитал
+        /// бы код через CORS. Остальным — 404, как будто адреса нет
+        /// </summary>
+        bool SetupCodeForApp(TcpClient client, Stream s, Request req)
+        {
+            string origin = req.Header("Origin");
+            bool appOrigin = string.IsNullOrEmpty(origin) || origin == "null" || origin.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+            bool direct = req.Header("X-Forwarded-For") == null && req.Header("X-Real-IP") == null && req.Header("Forwarded") == null;
+            bool loopback = false;
+            try { var ip = ((System.Net.IPEndPoint)client.Client.RemoteEndPoint).Address; loopback = System.Net.IPAddress.IsLoopback(ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip); } catch { }
+            if (!LocalSetupCode || !loopback || !direct || !appOrigin) return Error(s, req, 404, "not found");
+            string code = accounts.SetupCode;
+            var w = new JsonWriter().Obj().Prop("needs_setup", accounts.NeedsSetup);
+            if (code != null) w.Prop("code", code);
+            return SendJson(s, req, 200, w.EndObj().ToString());
         }
 
         bool NodeStatus(Stream s, Request req)

@@ -39,6 +39,8 @@ namespace TorrStreamTorrServer
             }
             else log("HTTPS недоступен: " + tls);
 
+            // База пользователей — LiteDB (на Tizen — JSON, см. AccountsStore.cs)
+            Accounts.StoreFactory = (dir, l) => new LiteDbAccountsStore(dir, l);
             var host = new TorrServerHost();
             try
             {

@@ -43,6 +43,14 @@ namespace TorrStreamTorrServer
         public readonly StreamRegistry Streams = new StreamRegistry();
         /// <summary>Отдавать код первого входа странице приложения на этом устройстве (Tizen)</summary>
         public bool LocalSetupCode;
+
+        /// <summary>Что не запустилось при старте (Host.Start) — в /version «problem»; null — всё в порядке</summary>
+        public string Problems { get; private set; }
+
+        public void Problem(string text)
+        {
+            lock (this) Problems = Problems == null ? text : Problems + "; " + text;
+        }
         public readonly Balancer Balancer;
         TcpListener listener;
         int connections;
@@ -352,7 +360,7 @@ namespace TorrStreamTorrServer
                     // Без входа — коротко: имя и версия (страница Tizen, проверка «это MonoServer»)
                     var w = new JsonWriter();
                     // ?gc — сначала собрать мусор (кнопка на странице отладки, проверка утечек)
-                    engine.WriteVersion(w, port, c.Admin && req.Has("gc"), !c.Admin);
+                    engine.WriteVersion(w, port, c.Admin && req.Has("gc"), !c.Admin, Problems);
                     return SendJson(s, req, w.ToString());
                 }
                 // Веб-интерфейс — только admin; без входа на «/» — страница входа

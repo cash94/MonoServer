@@ -23,7 +23,12 @@ namespace TorrStreamTorrServer
         Timer trafficTimer;
         long btDownSeen, btUpSeen;
 
-        /// <summary>Порт занят (стоит другой TorrServer) — исключение от HttpApi.Start</summary>
+        /// <summary>
+        /// Порт занят (стоит другой TorrServer) — исключение от HttpApi.Start.
+        /// Всё после HTTP исключений не бросает: что не запустилось — в журнал и в
+        /// /version (Problems), а служба отвечает и объясняет, что с ней. На Tizen
+        /// журнала не видно — причину показывает страница пакета по /version
+        /// </summary>
         public void Start(string dataDir, int port, Action<string> sink)
         {
             Action<string> log = m =>
@@ -40,16 +45,34 @@ namespace TorrStreamTorrServer
             Api = new HttpApi(Engine, Accounts, port, log, Journal, localKey) { LocalSetupCode = LocalSetupCode };
             Api.Start();
             WriteLocalKey(dataDir, localKey, log);
-            Accounts.Load();
-            Engine.Start();
-            Reconcile(log);
+            // Движок — до базы пользователей, как до 1.0.26: торренты и потоки
+            // работают, даже если с базой что-то не так
+            Step("торрент-движок", log, () => Engine.Start());
+            Step("база пользователей", log, () => Accounts.Load());
+            if (Accounts.LoadError != null) Api.Problem("база пользователей " + Accounts.LoadError + " — пользователи только до перезапуска");
+            Step("сверка торрентов с базой", log, () => Reconcile(log));
             // Трафик BitTorrent движок копит сам — в статистику раз в 10 с
             trafficTimer = new Timer(_ =>
             {
-                long d = Engine.BtDownloaded, u = Engine.BtUploaded;
-                Accounts.AddBt(d - btDownSeen, u - btUpSeen);
-                btDownSeen = d; btUpSeen = u;
+                try
+                {
+                    long d = Engine.BtDownloaded, u = Engine.BtUploaded;
+                    Accounts.AddBt(d - btDownSeen, u - btUpSeen);
+                    btDownSeen = d; btUpSeen = u;
+                }
+                catch (Exception e) { log("трафик: " + e.Message); }
             }, null, 10000, 10000);
+            log("служба готова" + (Api.Problems != null ? " с ошибками: " + Api.Problems : ""));
+        }
+
+        void Step(string what, Action<string> log, Action step)
+        {
+            try { step(); }
+            catch (Exception e)
+            {
+                log(what + " не запустился: " + e);
+                Api.Problem(what + ": " + (e.GetBaseException().Message ?? e.GetType().Name));
+            }
         }
 
         // Базы движка и пользователей — заодно: торрент в списке пользователя, но не

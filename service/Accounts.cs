@@ -1,10 +1,10 @@
-// База MonoServer — monoserver.db в данных службы (LiteDB): пользователи, сессии
-// веб-интерфейса, торренты каждого пользователя, трафик, доступ и балансировка.
-// LiteDB — встраиваемая база на чистом C# с журналом и транзакциями: после
-// сбоя посреди записи она восстанавливается сама. SQLite и прочие тянут
-// нативный код, а на Tizen 5.5 и в Mono из Termux своё нативное не загрузить;
-// MariaDB и подобные — отдельный сервер. Всё держим и в памяти (запросов
-// много, пользователей мало), в базу пишется только изменённое.
+// База MonoServer: пользователи, сессии веб-интерфейса, торренты каждого
+// пользователя, трафик, доступ и балансировка. Всё держим в памяти (запросов
+// много, пользователей мало), на диск пишет хранилище (AccountsStore.cs):
+// LiteDB — monoserver.db на Linux, Windows, Android (журнал и транзакции,
+// пишется только изменённое), JSON — monoserver.json на Tizen (с LiteDB служба
+// на Tizen 4.0 не запускалась). SQLite и прочие тянут нативный код, а на Tizen
+// 5.5 и в Mono из Termux своё нативное не загрузить; MariaDB — отдельный сервер.
 //
 // Пользователь admin — служебный, для веб-интерфейса. Пароля у него сначала нет:
 // при запуске служба пишет в журнал код первого входа, с ним на странице задаётся
@@ -21,7 +21,6 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using LiteDB;
 
 namespace TorrStreamTorrServer
 {
@@ -157,9 +156,9 @@ namespace TorrStreamTorrServer
         const int PasswordIterations = 20000;
         const int SessionDays = 30;
         const int KeepTrafficDays = 400;
-        const string TotalDay = "total";
+        internal const string TotalDay = "total";
 
-        readonly string path;
+        readonly string dataDir;
         readonly Action<string> log;
         readonly object sync = new object();
         readonly Dictionary<string, User> users = new Dictionary<string, User>(StringComparer.OrdinalIgnoreCase);
@@ -171,7 +170,7 @@ namespace TorrStreamTorrServer
         // Пришло с узлов (мастер): узел → логин → сколько узел уже сообщал
         readonly Dictionary<string, Dictionary<string, long>> nodeSeen = new Dictionary<string, Dictionary<string, long>>();
         readonly HashSet<string> nodeSeenDirty = new HashSet<string>();
-        LiteDatabase db;
+        IAccountsStore store;
         Timer flushTimer;
         string prunedDay;
 
@@ -195,7 +194,7 @@ namespace TorrStreamTorrServer
 
         public Accounts(string dataDir, Action<string> log)
         {
-            path = Path.Combine(dataDir, "monoserver.db");
+            this.dataDir = dataDir;
             codePath = Path.Combine(dataDir, "setup-code.txt");
             this.log = log ?? (_ => { });
         }
@@ -217,22 +216,36 @@ namespace TorrStreamTorrServer
         public static string Today() { return DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
         public static string DayAgo(int days) { return DateTime.UtcNow.AddDays(-days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
 
-        /// <summary>Открыть базу и прочитать всё в память; admin без пароля — если его нет</summary>
+        /// <summary>Почему база не открылась (пользователи и трафик тогда — только в памяти); null — открылась</summary>
+        public string LoadError { get; private set; }
+
+        /// <summary>
+        /// Какое хранилище: по умолчанию JSON (Tizen — там LiteDB не входит в пакет);
+        /// pc/Main.cs и mono/Main.cs ставят LiteDB (AccountsLiteDb.cs)
+        /// </summary>
+        public static Func<string, Action<string>, IAccountsStore> StoreFactory = (dir, log) => new JsonAccountsStore(dir, log);
+
+        /// <summary>
+        /// Открыть базу и прочитать всё в память; admin без пароля — если его нет.
+        /// Не бросает: что бы ни случилось с базой, служба работает (без неё —
+        /// пользователи и трафик в памяти до перезапуска, причина — LoadError)
+        /// </summary>
         public void Load()
         {
-            // Не загрузилась сама LiteDB (сборка, рантайм) — служба работает, но без памяти между запусками
-            try { db = Open(); }
-            catch (Exception e) { log("monoserver.db: LiteDB недоступна — " + e.Message + "; пользователи и трафик — только в памяти"); db = null; }
-            if (db != null)
+            try { store = StoreFactory(dataDir, log); }
+            catch (Exception e) { store = null; LoadError = "хранилище недоступно: " + (e.GetBaseException().Message ?? e.GetType().Name); }
+            if (store != null)
             {
-                try { lock (sync) Read(); }
+                try { lock (sync) store.Load(this); }
                 catch (Exception e)
                 {
-                    log("monoserver.db: не прочиталась — " + e.Message);
-                    db = Reset();
-                    lock (sync) Read();
+                    LoadError = store.Name + ": " + (e.GetBaseException().Message ?? e.GetType().Name);
+                    try { store.Close(); } catch { }
+                    store = null;
+                    lock (sync) ClearAll();
                 }
             }
+            if (LoadError != null) log("база пользователей: " + LoadError + " — пользователи и трафик только в памяти до перезапуска");
             lock (sync)
             {
                 if (!users.TryGetValue(User.AdminLogin, out var admin))
@@ -250,134 +263,60 @@ namespace TorrStreamTorrServer
             NewSetupCode();
         }
 
-        LiteDatabase Open()
-        {
-            try { return new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct }); }
-            catch (IOException e)
-            {
-                // Занята (другой экземпляр службы) или нет доступа — не трогаем
-                log("monoserver.db: не открылась — " + e.Message + "; пользователи и трафик — только в памяти");
-                return null;
-            }
-            catch (Exception e)
-            {
-                log("monoserver.db: не открылась — " + e.Message);
-                return Reset();
-            }
-        }
-
-        // Битая база — не затираем: в сторону, рядом с датой, и начинаем заново
-        LiteDatabase Reset()
-        {
-            try { db?.Dispose(); } catch { }
-            try
-            {
-                string bad = path + "." + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".bad";
-                if (File.Exists(path)) File.Move(path, bad);
-                string journal = Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path) + "-log.db");
-                if (File.Exists(journal)) File.Move(journal, bad + "-log");
-                log("monoserver.db отложена в " + Path.GetFileName(bad) + ", начинаю новую");
-                return new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct });
-            }
-            catch (Exception e)
-            {
-                // Без базы служба работает, но ничего не запомнит до перезапуска
-                log("monoserver.db: база недоступна, пользователи и трафик — только в памяти: " + e.Message);
-                return null;
-            }
-        }
-
         User NewUser(string login, string role)
         {
             return new User { Login = login, Role = role, Created = UnixNow(), Token = RandomHex(16), Stamp = UnixNow() };
         }
 
-        // ==================== база ====================
+        // ==================== для хранилищ (AccountsStore.cs, AccountsLiteDb.cs) ====================
 
-        static string S(BsonDocument d, string k) { var v = d[k]; return v != null && v.IsString ? v.AsString : ""; }
-        static long L(BsonDocument d, string k) { var v = d[k]; return v != null && v.IsNumber ? Convert.ToInt64(v.RawValue, CultureInfo.InvariantCulture) : 0; }
-        static bool B(BsonDocument d, string k, bool def) { var v = d[k]; return v != null && v.IsBoolean ? v.AsBoolean : def; }
+        internal object Sync => sync;
+        internal Dictionary<string, User> UsersMap => users;
+        internal Dictionary<string, Session> SessionsMap => sessions;
+        internal Dictionary<string, Dictionary<string, long>> NodeSeenMap => nodeSeen;
+        internal HashSet<string> NodeSeenDirty => nodeSeenDirty;
 
-        // Под sync
-        void Read()
+        /// <summary>Под sync: всё забыть (база не прочиталась — начинаем с чистого листа)</summary>
+        internal void ClearAll()
         {
-            users.Clear(); sessions.Clear(); remote.Clear(); nodeSeen.Clear(); Nodes.Clear();
-            foreach (var d in db.GetCollection("users").FindAll())
-            {
-                var u = new User
-                {
-                    Login = S(d, "login"),
-                    Role = S(d, "role") == "admin" ? "admin" : "user",
-                    Salt = S(d, "salt"),
-                    Hash = S(d, "hash"),
-                    Iterations = (int)L(d, "iterations"),
-                    Blocked = B(d, "blocked", false),
-                    Expires = L(d, "expires"),
-                    Created = L(d, "created"),
-                    Note = S(d, "note"),
-                    Token = S(d, "token"),
-                    Stamp = L(d, "stamp"),
-                };
-                if (u.Login.Length == 0) continue;
-                if (u.Iterations <= 0) u.Iterations = PasswordIterations;
-                if (u.Token.Length == 0) u.Token = RandomHex(16);
-                users[u.Login] = u;
-            }
-            foreach (var d in db.GetCollection("torrents").FindAll())
-            {
-                if (!users.TryGetValue(S(d, "login"), out var u)) continue;
-                var t = new UserTorrent { Hash = S(d, "hash").ToLowerInvariant(), Link = S(d, "link"), Title = S(d, "title"), Data = S(d, "data"), Category = S(d, "category"), Timestamp = L(d, "timestamp"), TmdbId = L(d, "tmdb_id") };
-                var sv = d["seasons"];
-                if (sv != null && sv.IsArray) t.Seasons = sv.AsArray.Where(x => x.IsNumber).Select(x => Convert.ToInt32(x.RawValue, CultureInfo.InvariantCulture)).ToArray();
-                if (t.Hash.Length > 0) u.Torrents[t.Hash] = t;
-            }
-            long now = UnixNow();
-            foreach (var d in db.GetCollection("sessions").FindAll())
-            {
-                var s = new Session { Token = d["_id"].AsString, Login = S(d, "login"), Ip = S(d, "ip"), Created = L(d, "created"), Expires = L(d, "expires") };
-                if (s.Expires > now && users.ContainsKey(s.Login)) sessions[s.Token] = s;
-            }
-            foreach (var d in db.GetCollection("traffic").FindAll())
-            {
-                var c = Counter(S(d, "scope"), true);
-                if (c == null) continue;
-                string day = S(d, "day");
-                long n = L(d, "bytes");
-                if (day == TotalDay) c.Total = n;
-                else c.Days[day] = n;
-            }
-            foreach (var d in db.GetCollection("node_seen").FindAll())
-            {
-                string nodeId = S(d, "node");
-                if (!nodeSeen.TryGetValue(nodeId, out var map)) nodeSeen[nodeId] = map = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-                map[S(d, "login")] = L(d, "bytes");
-            }
-            var cfg = db.GetCollection("config");
-            var access = cfg.FindById("access");
-            if (access != null)
-            {
-                RequireAuth = B(access, "require_auth", false);
-                LanWithoutAuth = B(access, "lan_without_auth", false);
-            }
-            var master = cfg.FindById("master");
-            if (master != null)
-            {
-                MasterEnabled = B(master, "enabled", false);
-                LocalMax = (int)Math.Max(0, Math.Min(10000, master["local_max"].IsNumber ? L(master, "local_max") : 5));
-                var nodes = master["nodes"];
-                if (nodes != null && nodes.IsArray)
-                    foreach (var v in nodes.AsArray.Where(x => x.IsDocument))
-                    {
-                        var n = v.AsDocument;
-                        Nodes.Add(new NodeConfig { Id = S(n, "id"), Name = S(n, "name"), Url = S(n, "url"), Key = S(n, "key"), Max = (int)L(n, "max"), Enabled = B(n, "enabled", true) });
-                    }
-            }
-            var node = cfg.FindById("node");
-            if (node != null) NodeKey = S(node, "key");
+            users.Clear(); sessions.Clear(); remote.Clear(); nodeSeen.Clear(); nodeSeenDirty.Clear(); Nodes.Clear();
+            httpOut.Total = btDown.Total = btUp.Total = 0;
+            httpOut.Days.Clear(); btDown.Days.Clear(); btUp.Days.Clear();
+        }
+
+        /// <summary>Под sync: пользователь из базы (без логина — пропустить); false — пропущен</summary>
+        internal bool AddLoadedUser(User u)
+        {
+            if (string.IsNullOrEmpty(u.Login)) return false;
+            if (u.Iterations <= 0) u.Iterations = PasswordIterations;
+            if (string.IsNullOrEmpty(u.Token)) u.Token = RandomHex(16);
+            users[u.Login] = u;
+            return true;
+        }
+
+        internal void AddLoadedSession(Session s, long now)
+        {
+            if (!string.IsNullOrEmpty(s.Token) && s.Expires > now && users.ContainsKey(s.Login)) sessions[s.Token] = s;
+        }
+
+        internal void AddLoadedNodeSeen(string node, string login, long bytes)
+        {
+            if (!nodeSeen.TryGetValue(node, out var map)) nodeSeen[node] = map = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            map[login] = bytes;
+        }
+
+        /// <summary>Все счётчики трафика по имени: http, bt_down, bt_up, u:логин, r:логин</summary>
+        internal IEnumerable<KeyValuePair<string, TrafficCounter>> Counters()
+        {
+            yield return new KeyValuePair<string, TrafficCounter>("http", httpOut);
+            yield return new KeyValuePair<string, TrafficCounter>("bt_down", btDown);
+            yield return new KeyValuePair<string, TrafficCounter>("bt_up", btUp);
+            foreach (var u in users.Values) yield return new KeyValuePair<string, TrafficCounter>("u:" + u.Login, u.Traffic);
+            foreach (var kv in remote) yield return new KeyValuePair<string, TrafficCounter>("r:" + kv.Key, kv.Value);
         }
 
         /// <summary>Счётчик по имени в базе: http, bt_down, bt_up, u:логин, r:логин</summary>
-        TrafficCounter Counter(string scope, bool create)
+        internal TrafficCounter Counter(string scope, bool create)
         {
             switch (scope)
             {
@@ -395,94 +334,30 @@ namespace TorrStreamTorrServer
             return null;
         }
 
-        // Запись — под sync. Ошибка записи не роняет запрос: в памяти уже всё
-        // поменялось, в журнале будет видно
-        void Db(string what, Action<LiteDatabase> write)
+        // ==================== запись в хранилище ====================
+
+        // Под sync. Ошибка записи не роняет запрос: в памяти уже всё поменялось,
+        // в журнале будет видно
+        void Store(string what, Action<IAccountsStore> write)
         {
-            if (db == null) return;
-            try { write(db); }
-            catch (Exception e) { log("monoserver.db, " + what + ": " + e.Message); }
+            var s = store;
+            if (s == null) return;
+            try { write(s); }
+            catch (Exception e) { log(s.Name + ", " + what + ": " + e.Message); }
         }
 
-        static string Key(string login) { return login.ToLowerInvariant(); }
-
-        void PutUser(User u)
-        {
-            Db("пользователь", d => d.GetCollection("users").Upsert(new BsonDocument
-            {
-                ["_id"] = Key(u.Login), ["login"] = u.Login, ["role"] = u.Role, ["salt"] = u.Salt, ["hash"] = u.Hash,
-                ["iterations"] = u.Iterations, ["blocked"] = u.Blocked, ["expires"] = u.Expires, ["created"] = u.Created,
-                ["note"] = u.Note, ["token"] = u.Token, ["stamp"] = u.Stamp,
-            }));
-        }
-
-        void PutTorrent(User u, UserTorrent t)
-        {
-            Db("торрент", d => d.GetCollection("torrents").Upsert(new BsonDocument
-            {
-                ["_id"] = Key(u.Login) + "|" + t.Hash, ["login"] = u.Login, ["hash"] = t.Hash, ["link"] = t.Link ?? "",
-                ["title"] = t.Title ?? "", ["data"] = t.Data ?? "", ["category"] = t.Category ?? "", ["timestamp"] = t.Timestamp,
-                ["tmdb_id"] = t.TmdbId, ["seasons"] = new BsonArray((t.Seasons ?? new int[0]).Select(x => new BsonValue(x))),
-            }));
-        }
-
-        void DelTorrent(User u, string hash)
-        {
-            Db("торрент", d => d.GetCollection("torrents").Delete(Key(u.Login) + "|" + hash));
-        }
-
-        void PutSession(Session s)
-        {
-            Db("сессия", d => d.GetCollection("sessions").Upsert(new BsonDocument
-            {
-                ["_id"] = s.Token, ["login"] = s.Login, ["ip"] = s.Ip, ["created"] = s.Created, ["expires"] = s.Expires,
-            }));
-        }
-
-        void PutConfig()
-        {
-            Db("настройки", d =>
-            {
-                var cfg = d.GetCollection("config");
-                cfg.Upsert(new BsonDocument { ["_id"] = "access", ["require_auth"] = RequireAuth, ["lan_without_auth"] = LanWithoutAuth });
-                var nodes = new BsonArray();
-                foreach (var n in Nodes)
-                    nodes.Add(new BsonDocument { ["id"] = n.Id, ["name"] = n.Name, ["url"] = n.Url, ["key"] = n.Key, ["max"] = n.Max, ["enabled"] = n.Enabled });
-                cfg.Upsert(new BsonDocument { ["_id"] = "master", ["enabled"] = MasterEnabled, ["local_max"] = LocalMax, ["nodes"] = nodes });
-                cfg.Upsert(new BsonDocument { ["_id"] = "node", ["key"] = NodeKey });
-            });
-        }
+        void PutUser(User u) { Store("пользователь", s => s.PutUser(u)); }
+        void PutTorrent(User u, UserTorrent t) { Store("торрент", s => s.PutTorrent(u, t)); }
+        void DelTorrent(User u, string hash) { Store("торрент", s => s.DelTorrent(u, hash)); }
+        void PutSession(Session x) { Store("сессия", s => s.PutSession(x)); }
+        void PutConfig() { Store("настройки", s => s.PutConfig(this)); }
 
         /// <summary>Трафик — в базу раз в 15 с (и при остановке); раз в сутки — чистка старого</summary>
         public void Flush()
         {
             lock (sync)
             {
-                if (db == null) return;
-                Db("трафик", d =>
-                {
-                    var col = d.GetCollection("traffic");
-                    d.BeginTrans();
-                    try
-                    {
-                        FlushCounter(col, "http", httpOut);
-                        FlushCounter(col, "bt_down", btDown);
-                        FlushCounter(col, "bt_up", btUp);
-                        foreach (var u in users.Values) FlushCounter(col, "u:" + u.Login, u.Traffic);
-                        foreach (var kv in remote) FlushCounter(col, "r:" + kv.Key, kv.Value);
-                        var seen = d.GetCollection("node_seen");
-                        foreach (var node in nodeSeenDirty)
-                        {
-                            seen.DeleteMany(Query.EQ("node", node));
-                            if (nodeSeen.TryGetValue(node, out var map))
-                                foreach (var kv in map)
-                                    seen.Upsert(new BsonDocument { ["_id"] = node + "|" + Key(kv.Key), ["node"] = node, ["login"] = kv.Key, ["bytes"] = kv.Value });
-                        }
-                        nodeSeenDirty.Clear();
-                        d.Commit();
-                    }
-                    catch { d.Rollback(); throw; }
-                });
+                Store("трафик", s => s.Flush(this));
                 string today = Today();
                 if (prunedDay != today)
                 {
@@ -490,15 +365,6 @@ namespace TorrStreamTorrServer
                     Prune();
                 }
             }
-        }
-
-        static void FlushCounter(ILiteCollection<BsonDocument> col, string scope, TrafficCounter c)
-        {
-            if (c.Dirty.Count == 0) return;
-            foreach (var day in c.Dirty)
-                col.Upsert(new BsonDocument { ["_id"] = scope + "|" + day, ["scope"] = scope, ["day"] = day, ["bytes"] = c.On(day) });
-            col.Upsert(new BsonDocument { ["_id"] = scope + "|" + TotalDay, ["scope"] = scope, ["day"] = TotalDay, ["bytes"] = c.Total });
-            c.Dirty.Clear();
         }
 
         // Под sync: просроченные сессии, трафик старше KeepTrafficDays
@@ -510,24 +376,16 @@ namespace TorrStreamTorrServer
             foreach (var u in users.Values) u.Traffic.Prune(before);
             foreach (var c in remote.Values) c.Prune(before);
             httpOut.Prune(before); btDown.Prune(before); btUp.Prune(before);
-            Db("чистка", d =>
-            {
-                d.GetCollection("sessions").DeleteMany(Query.LTE("expires", now));
-                // «total» больше любой даты — под чистку не попадёт
-                d.GetCollection("traffic").DeleteMany(Query.LT("day", before));
-                d.Checkpoint();
-            });
+            Store("чистка", s => s.Prune(this, now, before));
         }
 
         public void Close()
         {
             try { flushTimer?.Dispose(); } catch { }
             Flush();
-            lock (sync)
-            {
-                try { db?.Dispose(); } catch { }
-                db = null;
-            }
+            var s = store;
+            store = null;
+            if (s != null) try { s.Close(); } catch (Exception e) { log(s.Name + ": " + e.Message); }
         }
 
         // ==================== пароли и ключи ====================
@@ -710,14 +568,14 @@ namespace TorrStreamTorrServer
         {
             if (string.IsNullOrEmpty(token)) return;
             lock (sync)
-                if (sessions.Remove(token)) Db("сессия", d => d.GetCollection("sessions").Delete(token));
+                if (sessions.Remove(token)) Store("сессия", s => s.DelSession(token));
         }
 
         // Под sync
         void EndSessionsOf(string login)
         {
             foreach (var t in sessions.Where(kv => string.Equals(kv.Value.Login, login, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Key).ToList()) sessions.Remove(t);
-            Db("сессии", d => d.GetCollection("sessions").DeleteMany(Query.EQ("login", login)));
+            Store("сессии", s => s.DelSessionsOf(login));
         }
 
         // ==================== пользователи ====================
@@ -803,12 +661,7 @@ namespace TorrStreamTorrServer
                 if (u.IsAdmin) { error = "служебного admin удалить нельзя"; return null; }
                 users.Remove(u.Login);
                 EndSessionsOf(u.Login);
-                Db("пользователь", d =>
-                {
-                    d.GetCollection("users").Delete(Key(u.Login));
-                    d.GetCollection("torrents").DeleteMany(Query.EQ("login", u.Login));
-                    d.GetCollection("traffic").DeleteMany(Query.EQ("scope", "u:" + u.Login));
-                });
+                Store("пользователь", st => st.DelUser(u));
                 log("пользователь " + u.Login + " удалён");
                 return u.Torrents.Keys.ToList();
             }

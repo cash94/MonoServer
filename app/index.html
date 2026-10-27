@@ -24,7 +24,7 @@
   .status { font-size: 30px; color: #c8c8d2; min-height: 40px; }
   .ok { color: #5ad17a; } .bad { color: #ff6a6a; }
   .addr { font-size: 40px; color: #fff; margin-top: 24px; min-height: 48px; }
-  .detail { font-size: 22px; color: #6b6b78; margin-top: 18px; word-wrap: break-word; }
+  .detail { font-size: 22px; color: #8b8b98; margin-top: 18px; word-wrap: break-word; white-space: pre-line; }
   .support { display: inline-block; margin-top: 36px; padding: 18px 44px; font-size: 30px; color: #fff; background: #23232c; border: 3px solid #3a3a46; border-radius: 16px; }
   .support.focused { background: #ff8c00; border-color: #ffb050; color: #111; }
   .hint { font-size: 22px; color: #6b6b78; margin-top: 40px; }
@@ -137,16 +137,18 @@
 
   // Код первого входа в веб-интерфейс: журнала службы на телевизоре не видно,
   // поэтому код показываем здесь, пока пароль admin не задан. Служба отдаёт его
-  // только запросу с самого телевизора — поэтому 127.0.0.1, а не IP. Раз в 5 с:
-  // после пяти неверных попыток код меняется, после пароля — блок скрывается
+  // только запросу с самого телевизора (127.0.0.1 или свой IP — на Tizen 7+
+  // страница пакета до 127.0.0.1 не достаёт), спрашиваем по тому адресу, где
+  // служба ответила. Раз в 5 с: после пяти неверных попыток код меняется,
+  // после пароля — блок скрывается
   var setupTimer = null;
-  function watchSetupCode(addr) {
+  function watchSetupCode(base, addr) {
     var box = document.getElementById('setup');
     document.getElementById('setup-url').textContent = 'http://' + addr.split(' ')[0] + '/';
     var poll = function () {
       var x = new XMLHttpRequest();
       try {
-        x.open('GET', 'http://127.0.0.1:' + PORT + '/api/setup/code?_=' + Date.now(), true);
+        x.open('GET', base + '/api/setup/code?_=' + Date.now(), true);
         x.timeout = 4000;
         x.onload = function () {
           var d = null;
@@ -167,43 +169,111 @@
     poll();
   }
 
-  // /version по очереди по адресам; служба после запуска поднимается не сразу —
-  // спрашиваем до 30 раз раз в секунду
-  var tries = 0;
+  function get(url, cb) {
+    var x = new XMLHttpRequest();
+    try {
+      x.open('GET', url + (url.indexOf('?') < 0 ? '?' : '&') + '_=' + Date.now(), true);
+      x.timeout = 4000;
+      x.onload = function () { cb(null, x.status, x.responseText || ''); };
+      x.onerror = function () { cb('нет соединения'); };
+      x.ontimeout = function () { cb('не ответил за 4 с'); };
+      x.send();
+    } catch (e) { cb(e.message || 'ошибка запроса'); }
+  }
+
+  // Кто отвечает по адресу: cb({kind, ...}). kind:
+  //   mono  — MonoServer, d — его /version (в нём error/problem/starting);
+  //   broken — на /echo «MonoServer», а /version не JSON: служба отвечает, но не запустилась;
+  //   other — другой TorrServer (у него /version нет или он не наш);
+  //   none  — по адресу никто не отвечает (why — почему)
+  function probe(base, cb) {
+    get(base + '/version', function (err, status, text) {
+      if (err) { cb({ kind: 'none', why: err }); return; }
+      var d = null;
+      try { d = JSON.parse(text); } catch (e) { }
+      if (d && (d.name === 'MonoServer' || d.name === 'TorrStream TorrServer')) { cb({ kind: 'mono', d: d }); return; }
+      // /version не наш — смотрим /echo: у TorrServer это «MatriX.1xx», у MonoServer — с «MonoServer»
+      get(base + '/echo', function (err2, status2, echo) {
+        echo = String(echo || '').replace(/\s+/g, ' ').trim();
+        if (!err2 && /MonoServer/.test(echo)) {
+          cb({ kind: 'broken', why: 'HTTP ' + status + ': ' + (String(text).replace(/\s+/g, ' ').trim().slice(0, 300) || 'пустой ответ') });
+        } else if (!err2 && status2 === 200 && echo) {
+          cb({ kind: 'other', echo: echo.slice(0, 80) });
+        } else if (d) {
+          cb({ kind: 'other', echo: (d.name || '') + ' ' + (d.version || '') });
+        } else {
+          cb({ kind: 'none', why: 'отвечает HTTP ' + status + ', но это не TorrServer' });
+        }
+      });
+    });
+  }
+
+  // Ошибка запуска службы системой (tizen.application.launch) — в причину «недоступна»
+  var launchError = '';
+  var tries = 0, MAX_TRIES = 30;
+
+  // По адресам по очереди (IP телевизора, 127.0.0.1); служба после запуска
+  // поднимается не сразу — до MAX_TRIES раз раз в секунду. Ответил кто-то —
+  // по нему и решаем; не ответил никто — «недоступна» со списком, что пробовали
   function check() {
-    var list = bases(), i = 0;
+    var list = bases(), i = 0, misses = [];
     var next = function () {
       if (i >= list.length) {
-        if (++tries < 30) { setTimeout(check, 1000); return; }
-        show('Служба не отвечает', 'bad', '', 'Перезагрузите телевизор: служба запускается при его включении. Если на телевизоре уже стоит другой TorrServer, он мог занять порт 8090');
+        if (++tries < MAX_TRIES) {
+          show('Жду службу…', '', '', 'Попытка ' + tries + ' из ' + MAX_TRIES + ': ' + misses.join('; '));
+          setTimeout(check, 1000);
+          return;
+        }
+        unreachable(misses);
         return;
       }
-      var base = list[i++], x = new XMLHttpRequest();
-      try {
-        x.open('GET', base + '/version', true);
-        x.timeout = 4000;
-        x.onload = function () {
-          var d = null;
-          try { d = JSON.parse(x.responseText); } catch (e) { }
-          if (!d) { next(); return; }
-          if (d.name !== 'MonoServer' && d.name !== 'TorrStream TorrServer') {
-            show('На порту 8090 — другой TorrServer', 'ok', shownAddr(base, null), 'Им и пользуйтесь; эта служба не запустилась, чтобы ему не мешать');
-            return;
-          }
-          if (d.error) { show('Служба запущена, но торрент-движок нет', 'bad', '', d.error); return; }
-          show('MonoServer работает', 'ok', shownAddr(base, d),
-            d.engine + ' · ' + d.runtime + ' · кэш ' + d.cache_mb + ' МБ · торрентов ' + d.torrents);
-          watchSetupCode(shownAddr(base, d));
-        };
-        x.onerror = next;
-        x.ontimeout = next;
-        x.send();
-      } catch (e) { next(); }
+      var base = list[i++];
+      probe(base, function (r) {
+        if (r.kind === 'none') { misses.push(base.replace(/^http:\/\//, '') + ' — ' + r.why); next(); return; }
+        if (r.kind === 'other') {
+          show('На порту 8090 — другой TorrServer', 'bad', shownAddr(base, null),
+            'Отвечает «' + r.echo + '», а не MonoServer: он запустился раньше и занял порт, MonoServer поэтому не работает. ' +
+            'Пользуйтесь им — или удалите его (или выключите его автозапуск) и перезагрузите телевизор, чтобы работал MonoServer');
+          return;
+        }
+        if (r.kind === 'broken') {
+          show('MonoServer отвечает, но не запустился', 'bad', shownAddr(base, null), r.why);
+          return;
+        }
+        var d = r.d;
+        if (d.starting && ++tries < MAX_TRIES) {
+          show('Служба запускается…', '', shownAddr(base, d), 'Торрент-движок ещё не готов');
+          setTimeout(check, 1000);
+          return;
+        }
+        if (d.error || d.starting) {
+          show('Служба запущена, но торрент-движок нет', 'bad', shownAddr(base, d), d.error || 'движок так и не запустился');
+          return;
+        }
+        show('MonoServer работает', 'ok', shownAddr(base, d),
+          d.engine + ' · ' + d.runtime + ' · кэш ' + d.cache_mb + ' МБ · торрентов ' + d.torrents +
+          (d.problem ? '\nВнимание: ' + d.problem : ''));
+        watchSetupCode(base, shownAddr(base, d));
+      });
     };
     next();
   }
 
-  try { tizen.application.launch(SERVICE, function () { }, function () { }); } catch (e) { }
+  // Никто не ответил ни по одному адресу: служба не запущена — или запущена,
+  // но страница до неё не достаёт. Проверка с телефона различит
+  function unreachable(misses) {
+    var ip = tvIp();
+    var why = 'Пробовали: ' + misses.join('; ') + '.';
+    if (!ip) why += ' IP телевизора не определился.';
+    if (launchError) why += ' Запуск службы: ' + launchError + '.';
+    why += ' Откройте с телефона http://' + (ip || '<IP телевизора>') + ':' + PORT + '/echo — ответит MonoServer: служба работает, ' +
+      'а эта страница до неё не достаёт; не откроется — служба не запущена: перезагрузите телевизор или переустановите пакет.';
+    show('Служба недоступна по адресу', 'bad', '', why);
+  }
+
+  try {
+    tizen.application.launch(SERVICE, function () { }, function (e) { launchError = (e && (e.message || e.name)) || 'ошибка'; });
+  } catch (e) { launchError = e.message || String(e); }
   setTimeout(check, 1000);
 })();
 </script>

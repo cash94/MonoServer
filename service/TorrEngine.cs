@@ -1866,22 +1866,28 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>collect — сначала полная сборка мусора: что останется в gc_mb, то и правда занято</summary>
-        public void WriteVersion(JsonWriter w, int httpPort, bool collect = false, bool brief = false)
+        /// <summary>problem — что ещё не запустилось у службы (Host.Start), для страницы Tizen и веб-интерфейса</summary>
+        public void WriteVersion(JsonWriter w, int httpPort, bool collect = false, bool brief = false, string problem = null)
         {
             // Без входа — только чем служба себя называет (страница Tizen, клиенты):
-            // память, адреса и состояние движка — для веб-интерфейса админа
-            if (brief)
+            // память, адреса и состояние движка — для веб-интерфейса админа.
+            // Движок ещё не запущен или не запустился (Settings нет) — тоже коротко,
+            // с причиной, а не 500: по нему страница Tizen и пишет, что не так
+            var settings = Settings;
+            if (brief || settings == null)
             {
                 w.Obj().Prop("name", "MonoServer").Prop("service", ServiceVersion).Prop("echo", EchoVersion)
                     .Prop("engine", "MonoTorrent " + EngineVersion())
                     .Prop("runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription)
-                    .Prop("port", httpPort).Prop("cache_mb", Settings.CacheSize >> 20);
+                    .Prop("port", httpPort).Prop("cache_mb", settings != null ? settings.CacheSize >> 20 : 0);
                 // Страница Tizen показывает по ним IP телевизора, если webapis его не дал
                 w.Key("lan_ips").Arr();
                 foreach (var ip in LanAddresses()) w.Val(ip);
                 w.EndArr();
                 lock (sync) w.Prop("torrents", entries.Count);
                 if (StartError != null) w.Prop("error", StartError);
+                else if (settings == null) w.Prop("starting", true);
+                if (problem != null) w.Prop("problem", problem);
                 w.EndObj();
                 return;
             }
@@ -1931,6 +1937,7 @@ namespace TorrStreamTorrServer
                 .Prop("trackers", trackers != null ? trackers.Current.Length + " (" + trackers.Source + (trackers.UpdatedAt.HasValue ? ", " + trackers.UpdatedAt.Value.ToString("dd.MM HH:mm") : "") + ")" : "")
                 .Prop("uptime_s", (long)(DateTime.UtcNow - StartedAt).TotalSeconds);
             if (StartError != null) w.Prop("error", StartError);
+            if (problem != null) w.Prop("problem", problem);
             w.EndObj();
         }
     }

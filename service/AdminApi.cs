@@ -201,13 +201,29 @@ namespace TorrStreamTorrServer
             string origin = req.Header("Origin");
             bool appOrigin = string.IsNullOrEmpty(origin) || origin == "null" || origin.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
             bool direct = req.Header("X-Forwarded-For") == null && req.Header("X-Real-IP") == null && req.Header("Forwarded") == null;
-            bool loopback = false;
-            try { var ip = ((System.Net.IPEndPoint)client.Client.RemoteEndPoint).Address; loopback = System.Net.IPAddress.IsLoopback(ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip); } catch { }
-            if (!LocalSetupCode || !loopback || !direct || !appOrigin) return Error(s, req, 404, "not found");
+            // С этого же устройства: 127.0.0.1 или собственный адрес — на Tizen 7+
+            // страница пакета до 127.0.0.1 не достаёт и стучится по IP телевизора
+            bool own = false;
+            try { var ip = ((System.Net.IPEndPoint)client.Client.RemoteEndPoint).Address; own = IsOwnAddress(ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip); } catch { }
+            if (!LocalSetupCode || !own || !direct || !appOrigin) return Error(s, req, 404, "not found");
             string code = accounts.SetupCode;
             var w = new JsonWriter().Obj().Prop("needs_setup", accounts.NeedsSetup);
             if (code != null) w.Prop("code", code);
             return SendJson(s, req, 200, w.EndObj().ToString());
+        }
+
+        /// <summary>Адрес этого устройства: loopback или один из адресов его сетевых интерфейсов</summary>
+        static bool IsOwnAddress(System.Net.IPAddress ip)
+        {
+            if (System.Net.IPAddress.IsLoopback(ip)) return true;
+            try
+            {
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                    foreach (var a in ni.GetIPProperties().UnicastAddresses)
+                        if (a.Address.Equals(ip)) return true;
+            }
+            catch { }
+            return false;
         }
 
         bool NodeStatus(Stream s, Request req)

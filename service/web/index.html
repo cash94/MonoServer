@@ -601,10 +601,12 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     for (var i = 0; i < rows.length; i++) html += '<dt>' + esc(rows[i][0]) + '</dt><dd>' + esc(rows[i][1]) + '</dd>';
     if (!v.evict) html += '<dt class="err-text">evict</dt><dd class="err-text" title="Вытесненные куски не скачаются заново при перемотке назад">недоступен</dd>';
     if (v.error) html += '<dt class="err-text">Ошибка</dt><dd class="err-text">' + esc(v.error) + '</dd>';
+    // Что не запустилось при старте службы (например, база пользователей) — служба при этом работает
+    if (v.problem) html += '<dt class="err-text">Проблема</dt><dd class="err-text">' + esc(v.problem) + '</dd>';
     $('ver').innerHTML = html;
     if (v.cache_mb) cacheMb = v.cache_mb;
     // Память — первой: на телефоне строка обрезается справа
-    $('ver-short').innerHTML = '<span class="dot' + (v.error ? ' bad' : '') + '"></span>память <b>' + esc(mb(known ? rss : gc)) + '</b>' +
+    $('ver-short').innerHTML = '<span class="dot' + (v.error || v.problem ? ' bad' : '') + '"></span>память <b>' + esc(mb(known ? rss : gc)) + '</b>' +
       ' · открыто <b>' + (v.active || 0) + '</b> · ' + esc(v.service);
   }
 

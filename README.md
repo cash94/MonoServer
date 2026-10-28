@@ -419,5 +419,8 @@ cd android && ./gradlew :app:assembleRelease
 что у TorrStream-AndroidServer); без них в релиз идут debug-APK — каждый раз с
 новым ключом, поверх прежней версии они не ставятся.
 
-Сторонний код и лицензии — `service/res/THIRD-PARTY-NOTICES.txt` (MonoTorrent, MIT);
-в APK для Android ещё Mono (MIT), OpenSSL (Apache 2.0), krb5 и zlib — из пакетов Termux.
+## Лицензия
+
+MonoServer — [MIT](LICENSE). Сторонний код и его лицензии —
+`service/res/THIRD-PARTY-NOTICES.txt` (MonoTorrent и LiteDB, MIT); в APK для
+Android ещё Mono (MIT), OpenSSL (Apache 2.0), krb5 и zlib — из пакетов Termux.

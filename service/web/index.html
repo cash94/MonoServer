@@ -164,6 +164,11 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
 .set-grid label { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--panel2); padding: 8px 12px; border-radius: 10px; }
 .set-grid label span { overflow: hidden; text-overflow: ellipsis; }
 .set-grid input[type=number], .set-grid input[type=text] { width: 120px; }
+/* Ползунок предзагрузки: % и сколько это МБ от кэша на торрент */
+.set-grid label.set-wide { flex-wrap: wrap; }
+.set-range { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: 1 1 220px; min-width: 0; }
+.set-range input[type=range] { flex: 1; min-width: 90px; max-width: 160px; accent-color: var(--accent); }
+.set-range output { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .empty { color: var(--muted); padding: 28px 0; text-align: center; }
 /* Владельцы торрента (видит админ) */
 .owners { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -1210,6 +1215,11 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i], v = s[k], label = SET_LABELS[k] || k, input;
         if (k === 'DisableUTP') continue;   // то же, что EnableUTP, — для клиентов TorrServer
+        if (k === 'PreloadCache') {
+          input = '<span class="set-range"><input type="range" min="0" max="100" step="1" data-k="PreloadCache" value="' + v + '"><output id="preload-mb"></output></span>';
+          html += '<label class="set-wide" title="' + esc(k) + '"><span>' + esc(label) + '</span>' + input + '</label>';
+          continue;
+        }
         if (typeof v === 'boolean') input = '<input type="checkbox" data-k="' + k + '"' + (v ? ' checked' : '') + '>';
         else if (typeof v === 'number') input = '<input type="number" data-k="' + k + '" value="' + (k === 'CacheSize' ? Math.round(v / 1048576) : v) + '">';
         else if (v === null || typeof v === 'string') input = '<input type="text" data-k="' + k + '" value="' + esc(v == null ? '' : v) + '">';
@@ -1217,7 +1227,20 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
         html += '<label title="' + esc(k) + '"><span>' + esc(label) + '</span>' + input + '</label>';
       }
       $('set-grid').innerHTML = html;
+      var range = setInput('PreloadCache'), cache = setInput('CacheSize');
+      if (range) range.oninput = updatePreload;
+      if (cache) cache.addEventListener('input', updatePreload);
+      updatePreload();
     });
+  }
+  function setInput(key) { return $('set-grid').querySelector('input[data-k="' + key + '"]'); }
+  // «20% от 64 МБ = 12,8 МБ» — сколько служба скачает до начала просмотра
+  function updatePreload() {
+    var range = setInput('PreloadCache'), out = $('preload-mb');
+    if (!range || !out) return;
+    var cache = setInput('CacheSize'), mb = cache ? +cache.value : settings.CacheSize / 1048576;
+    function fmt(n) { return (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '').replace('.', ','); }
+    out.textContent = range.value + '% от ' + fmt(mb) + ' МБ = ' + fmt(mb * range.value / 100) + ' МБ';
   }
   $('set-form').onsubmit = function (ev) {
     ev.preventDefault();
@@ -1226,7 +1249,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     for (var i = 0; i < inputs.length; i++) {
       var el = inputs[i], key = el.getAttribute('data-k');
       if (el.type === 'checkbox') sets[key] = el.checked;
-      else if (el.type === 'number') sets[key] = key === 'CacheSize' ? Math.round(+el.value * 1048576) : +el.value;
+      else if (el.type === 'number' || el.type === 'range') sets[key] = key === 'CacheSize' ? Math.round(+el.value * 1048576) : +el.value;
       else sets[key] = el.value;
     }
     post('/settings', { action: 'set', sets: sets }, function (err) {

@@ -111,7 +111,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.29";
+        public const string ServiceVersion = "1.0.30";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 

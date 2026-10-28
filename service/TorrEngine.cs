@@ -202,6 +202,10 @@ namespace TorrStreamTorrServer
             ThreadPool.SetMinThreads(Math.Max(minWorkers, 32), Math.Max(minIo, 32));
             // До первого обращения к типам MonoTorrent: их журналы создаются при загрузке
             MonoTorrent.Logging.LoggerFactory.Register(name => new JournalLogger(name, log));
+            // MonoTorrent пишет в Trace про каждый незнакомый ему клиент пира
+            // («Unsupported standard style: PI» — PicoTorrent и др.), а стандартный
+            // слушатель Trace в .NET выводит это в журнал — по строке на подключение
+            System.Diagnostics.Trace.Listeners.Remove("Default");
             TaskScheduler.UnobservedTaskException += (s, a) =>
             {
                 if (Interlocked.Increment(ref unhandled) <= 20) log("необработанная ошибка задачи: " + a.Exception?.GetBaseException());

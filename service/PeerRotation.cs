@@ -120,6 +120,10 @@ namespace TorrStreamTorrServer
             return removed;
         }
 
+        /// <summary>Байт/с с тех пор, как пира увидели впервые</summary>
+        long AverageRate(PeerId p, long now)
+            => p.Monitor.DataBytesReceived * 1000 / Math.Max(1000, now - firstSeen[p.Uri]);
+
         string RotateOnLoop(ClientEngine engine, TorrentManager m, int limit, bool demand, long now, long interval)
         {
             var connected = (ConnectedField.GetValue(m.Peers) as IList)?.Cast<PeerId>().Where(p => p.IsConnected).ToList();
@@ -151,8 +155,10 @@ namespace TorrStreamTorrServer
             if (over > 0)
             {
                 // Сверх лимита — самые медленные; окно скачано (скорость упирается в
-                // нас) — те, кто прислал меньше всего за всё время
-                victims = (demand ? eligible.OrderBy(r => r.Value) : eligible.OrderBy(r => r.Key.Monitor.DataBytesReceived)).Take(over).ToList();
+                // нас) — с наименьшей средней скоростью с подключения. По байтам за
+                // всё время недавно подключённый пир выходил худшим, даже если качал
+                // быстрее всех: отключали пира на 2269 КБ/с при медиане 8
+                victims = (demand ? eligible.OrderBy(r => r.Value) : eligible.OrderBy(r => AverageRate(r.Key, now))).Take(over).ToList();
                 why = "сверх лимита " + limit;
             }
             else if (demand && spare > 0 && connected.Count >= limit - 1)

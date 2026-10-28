@@ -25,11 +25,12 @@ namespace TorrStreamTorrServer
         public string Remote;       // логин зрителя от мастера (этот сервер — узел)
         public bool Local;          // приложение на этом устройстве (local.key)
         public bool Anonymous;      // без входа там, где вход не нужен
+        public bool LanAdmin;       // веб-интерфейс из домашней сети без входа (LanWithoutAuth)
         public string Ip;
         public string Error;        // почему нельзя (блокировка, срок, неверный пароль)
         public int ErrorCode;
 
-        public bool Admin => Local || (User != null && User.IsAdmin);
+        public bool Admin => Local || LanAdmin || (User != null && User.IsAdmin);
         public string Login => User != null ? User.Login : null;
         /// <summary>Зритель для счёта «сколько человек смотрит»: пользователь, зритель мастера или адрес</summary>
         public string Viewer => User != null ? "u:" + User.Login.ToLowerInvariant() : Remote != null ? "r:" + Remote.ToLowerInvariant() : "ip:" + Ip;
@@ -214,9 +215,42 @@ namespace TorrStreamTorrServer
                 c.ErrorCode = 401;
             }
             // Без входа: где вход выключен, и (если разрешено) из домашней сети
-            c.Anonymous = !accounts.RequireAuth || (accounts.LanWithoutAuth && IsLan(c.Ip));
+            bool lan = accounts.LanWithoutAuth && IsLan(c.Ip);
+            c.Anonymous = !accounts.RequireAuth || lan;
             if (c.Anonymous && c.ErrorCode == 401) { c.Error = null; c.ErrorCode = 0; }
+            // Веб-интерфейс из домашней сети — сразу admin, но только со своей страницы
+            // (OwnPage): CORS у службы открыт всем, и иначе любой сайт, открытый в
+            // браузере дома, управлял бы службой от имени admin
+            c.LanAdmin = lan && !tried && OwnPage(req);
             return c;
+        }
+
+        /// <summary>
+        /// Запрос с собственной страницы службы, не с чужого сайта: Origin (браузер шлёт
+        /// его на запросы с других сайтов и на POST) — тот же адрес, что Host, и Host —
+        /// IP, localhost или локальное имя. Последнее — от DNS rebinding: чужое имя,
+        /// которое резолвится в адрес службы, дало бы совпадение Origin и Host
+        /// </summary>
+        static bool OwnPage(Request req)
+        {
+            string host = req.Header("Host");
+            if (string.IsNullOrEmpty(host) || !LocalHostName(host)) return false;
+            if (req.Header("Sec-Fetch-Site") is string site && site != "same-origin" && site != "none") return false;
+            string origin = req.Header("Origin");
+            if (string.IsNullOrEmpty(origin)) return true;
+            return Uri.TryCreate(origin, UriKind.Absolute, out var o) && string.Equals(o.Authority, host, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool LocalHostName(string host)
+        {
+            // Host — «имя:порт» или «[IPv6]:порт»
+            string name = host.StartsWith("[") ? host.Substring(1, Math.Max(0, host.IndexOf(']') - 1)) : host.Split(':')[0];
+            name = name.TrimEnd('.').ToLowerInvariant();
+            if (IPAddress.TryParse(name, out _) || name == "localhost") return true;
+            if (name.IndexOf('.') < 0) return name.Length > 0;   // имя компьютера в домашней сети
+            foreach (var suffix in new[] { ".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain" })
+                if (name.EndsWith(suffix)) return true;
+            return false;
         }
 
         /// <summary>

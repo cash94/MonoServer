@@ -198,7 +198,7 @@ namespace TorrStreamTorrServer
             if (access != null)
             {
                 a.RequireAuth = access.Bool("require_auth") ?? false;
-                a.LanWithoutAuth = access.Bool("lan_without_auth") ?? false;
+                a.LanWithoutAuth = access.Bool("lan_without_auth") ?? true;
             }
             var master = Obj(root, "master");
             if (master != null)

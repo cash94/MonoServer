@@ -392,7 +392,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       <label class="switch-row"><input type="checkbox" id="acc-require"><span><b>Потоки и API — только со входом</b>
         <small>TorrStream и Lampa входят логином и паролем пользователя (как к TorrServer с паролем), плееры — по ссылке с ключом. Выключено — как раньше: без пароля, со списком торрентов admin.</small></span></label>
       <label class="switch-row"><input type="checkbox" id="acc-lan"><span><b>Домашняя сеть — без входа</b>
-        <small>Устройства из локальной сети (и это же устройство) смотрят без пароля, со списком admin. За nginx на этой же машине включайте, только если он передаёт X-Forwarded-For.</small></span></label>
+        <small>Устройства из локальной сети (и это же устройство) смотрят без пароля, со списком admin, а веб-интерфейс открывают сразу как admin, без формы входа. Работает и при выключенном «только со входом». За nginx на этой же машине оставляйте включённым, только если он передаёт X-Forwarded-For: иначе все запросы из интернета выглядят локальными.</small></span></label>
       <div class="muted" id="acc-msg" style="margin-top:6px"></div>
     </div>
 
@@ -1290,7 +1290,6 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       if (err || !a) { $('acc-msg').innerHTML = errHtml(err || 'нет ответа'); return; }
       $('acc-require').checked = !!a.require_auth;
       $('acc-lan').checked = !!a.lan_without_auth;
-      $('acc-lan').disabled = !a.require_auth;
     });
   }
   $('acc-require').onchange = $('acc-lan').onchange = function () {

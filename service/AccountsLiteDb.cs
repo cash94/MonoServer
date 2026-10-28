@@ -119,7 +119,7 @@ namespace TorrStreamTorrServer
             if (access != null)
             {
                 a.RequireAuth = B(access, "require_auth", false);
-                a.LanWithoutAuth = B(access, "lan_without_auth", false);
+                a.LanWithoutAuth = B(access, "lan_without_auth", true);
             }
             var master = cfg.FindById("master");
             if (master != null)

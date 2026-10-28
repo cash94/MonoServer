@@ -176,7 +176,9 @@ namespace TorrStreamTorrServer
 
         // Доступ
         public bool RequireAuth;            // потоки и API торрентов — только с входом
-        public bool LanWithoutAuth;         // из домашней сети — без входа (со списком admin)
+        // Из домашней сети — без входа: потоки и API со списком admin, веб-интерфейс —
+        // сразу admin (HttpApi.Identify). По умолчанию включено, действует и без RequireAuth
+        public bool LanWithoutAuth = true;
         // Мастер-сервер
         public bool MasterEnabled;
         public int LocalMax = 5;            // зрителей здесь, дальше — на узлы; 0 — всех на узлы

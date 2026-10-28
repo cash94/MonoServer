@@ -61,8 +61,9 @@ namespace TorrStreamTorrServer
                 case "/api/setup/code": return SetupCodeForApp(client, s, req);
                 case "/api/node/status": return NodeStatus(s, req);
                 case "/api/me":
-                    if (c.User == null) return Unauthorized(s, req, c);
-                    return SendJson(s, req, 200, Me(c.User, true));
+                    var me = c.User ?? (c.LanAdmin ? accounts.Admin : null);
+                    if (me == null) return Unauthorized(s, req, c);
+                    return SendJson(s, req, 200, Me(me, true));
             }
             if (!c.Admin)
             {

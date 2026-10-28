@@ -15,6 +15,15 @@
 // к ним не подключиться снова. Освободившееся место MonoTorrent занимает сам
 // следующим адресом из запаса. Всё — в главном цикле MonoTorrent (его списки
 // не потокобезопасны); внутренности — через отражение, их нет — ничего не делаем.
+//
+// Там же — уборка закрытых пиров, оставшихся в ConnectedPeers. CleanupSocket
+// MonoTorrent 3.0.2 сначала отменяет запросы, потом убирает пира из списков,
+// а закрывает (Dispose) в любом случае: если отмена бросила исключение, закрытый
+// пир остаётся в ConnectedPeers. Тогда каждый такт главного цикла бросает
+// ObjectDisposedException (MessageQueue) на Have/KeepAlive и обрывается, а через
+// 180 с без сообщений от пира PostLogicTick зовёт CleanupSocket, тот у закрытого
+// ничего не делает, и цикл «CleanupSocket; i--» крутится вечно — движок встаёт.
+// Уборка — и у раздающих торрентов: этот такт MonoTorrent у них тот же.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -38,8 +47,16 @@ namespace TorrStreamTorrServer
             InactiveManagerProp?.PropertyType.GetProperty("InactivePeerList", BindingFlags.NonPublic | BindingFlags.Instance);
         static readonly FieldInfo ConnectedField =
             typeof(PeerManager).GetField("ConnectedPeers", BindingFlags.NonPublic | BindingFlags.Instance);
+        static readonly FieldInfo ActiveField =
+            typeof(PeerManager).GetField("ActivePeers", BindingFlags.NonPublic | BindingFlags.Instance);
+        static readonly PropertyInfo PeerProp =
+            typeof(PeerId).GetProperty("Peer", BindingFlags.NonPublic | BindingFlags.Instance);
+        static readonly FieldInfo OpenConnectionsField =
+            typeof(ConnectionManager).GetField("openConnections", BindingFlags.NonPublic | BindingFlags.Instance);
         static readonly MethodInfo CleanupMethod =
             typeof(ConnectionManager).GetMethod("CleanupSocket", BindingFlags.NonPublic | BindingFlags.Instance);
+        static readonly MethodInfo CancelRequestsMethod =
+            typeof(PieceManager).GetMethod("CancelRequests", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(PeerId) }, null);
 
         /// <summary>Сколько соединений сверх ConnectionsLimit разрешить MonoTorrent (их место — попыткам)</summary>
         public static int Headroom(int limit) { return Supported ? Math.Max(5, limit / 4) : 0; }
@@ -55,20 +72,52 @@ namespace TorrStreamTorrServer
         /// <summary>Всего отключено медленных пиров (для /cache)</summary>
         public int Rotated { get; private set; }
 
-        /// <summary>Раз в 2 с из TorrEngine; строка для журнала — если кого-то отключили</summary>
+        /// <summary>Раз в 2 с из TorrEngine (качающие и раздающие торренты); строка для журнала — если кого-то отключили</summary>
         public string Tick(ClientEngine engine, TorrentManager m, int limit, bool demand, long now)
         {
             if (!Supported || engine == null || m == null) return null;
             if (lastMs >= 0 && now - lastMs < EveryMs) return null;
             long interval = lastMs < 0 ? 0 : now - lastMs;
             lastMs = now;
+            bool rotate = m.State == TorrentState.Downloading;
             string report = null;
             try
             {
-                Loop.Send(_ => report = RotateOnLoop(engine, m, limit, demand, now, interval), null);
+                Loop.Send(_ =>
+                {
+                    int removed = RemoveDisposed(engine, m);
+                    if (rotate) report = RotateOnLoop(engine, m, limit, demand, now, interval);
+                    // Скорости — только за интервал, когда качали
+                    else lastBytes.Clear();
+                    if (removed > 0)
+                        report = "закрытые пиры убраны из подключённых: " + removed + (report != null ? "; " + report : "");
+                }, null);
             }
             catch (Exception e) { report = "замена пиров: " + e.GetBaseException().Message; }
             return report;
+        }
+
+        /// <summary>Убрать из ConnectedPeers пиров, закрытых оборвавшимся CleanupSocket (в начале файла)</summary>
+        static int RemoveDisposed(ClientEngine engine, TorrentManager m)
+        {
+            if (!(ConnectedField.GetValue(m.Peers) is IList connected)) return 0;
+            int removed = 0;
+            for (int i = connected.Count - 1; i >= 0; i--)
+            {
+                if (!(connected[i] is PeerId p) || p.IsConnected) continue;
+                connected.RemoveAt(i);
+                removed++;
+                // Его блоки — снова свободны (на отмене CleanupSocket и оборвался). Сама
+                // отмена пиру не уйдёт: очередь закрыта — ObjectDisposedException, блоки к
+                // тому времени уже отменены
+                try { CancelRequestsMethod?.Invoke(m.PieceManager, new object[] { p }); } catch { }
+                if (PeerProp?.GetValue(p) is object peer && ActiveField?.GetValue(m.Peers) is IList active)
+                    active.Remove(peer);
+                // Счётчик соединений движка CleanupSocket уменьшает вместе с удалением из списка
+                if (OpenConnectionsField != null)
+                    OpenConnectionsField.SetValue(engine.ConnectionManager, Math.Max(0, (int)OpenConnectionsField.GetValue(engine.ConnectionManager) - 1));
+            }
+            return removed;
         }
 
         string RotateOnLoop(ClientEngine engine, TorrentManager m, int limit, bool demand, long now, long interval)

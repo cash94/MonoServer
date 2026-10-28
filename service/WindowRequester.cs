@@ -282,10 +282,18 @@ namespace TorrStreamTorrServer
         {
             if (HighPriorityPicker == null || Enqueuer == null)
                 return;
-            if (CancellationsCache.Length < peer.AmRequestingPiecesCount)
-                CancellationsCache = new PieceSegment[peer.AmRequestingPiecesCount];
-            var cancellations = CancellationsCache.AsSpan(0, peer.AmRequestingPiecesCount);
+            // Счётчик запросов пира расходится с блоками у PositionPicker: блоков
+            // бывает больше, отмена каждого его уменьшает — и он уходил в минус.
+            // AsSpan(0, минус) — ArgumentOutOfRange, CleanupSocket обрывался до
+            // удаления пира из ConnectedPeers, и уже закрытый пир ронял главный
+            // цикл MonoTorrent («Cannot access a disposed object: MessageQueue»)
+            int count = Math.Max(0, peer.AmRequestingPiecesCount);
+            if (CancellationsCache.Length < count)
+                CancellationsCache = new PieceSegment[count];
+            var cancellations = CancellationsCache.AsSpan(0, count);
             var cancelled = HighPriorityPicker.CancelRequests(peer, startIndex, endIndex, cancellations);
+            if (peer.AmRequestingPiecesCount < 0)
+                peer.AmRequestingPiecesCount = 0;
             Enqueuer.EnqueueCancellations(peer, cancellations.Slice(0, cancelled));
         }
 

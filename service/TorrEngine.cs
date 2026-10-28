@@ -1213,7 +1213,7 @@ namespace TorrStreamTorrServer
             {
                 foreach (var e in entries.Values)
                 {
-                    if (e.Manager != null && e.Manager.HasMetadata && e.Manager.State == TorrentState.Downloading)
+                    if (e.Manager != null && e.Manager.HasMetadata && (e.Manager.State == TorrentState.Downloading || e.Manager.State == TorrentState.Seeding))
                         rotate.Add(new KeyValuePair<TorrEntry, bool>(e, NeedsDownload(e)));
                     if (e.Manager != null)
                     {
@@ -1238,6 +1238,7 @@ namespace TorrStreamTorrServer
             {
                 string r = kv.Key.Rotation.Tick(engine, kv.Key.Manager, Settings.ConnectionsLimit, kv.Value, now);
                 if (r != null) log(kv.Key.Hash + ": " + r);
+                if (kv.Key.Manager.State != TorrentState.Downloading) continue;
                 try { kv.Key.Pool.Tick(kv.Key.Manager); } catch (Exception ex) { log(kv.Key.Hash + ": запас пиров — " + ex.Message); }
             }
             foreach (var kv in idle)

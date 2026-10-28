@@ -50,7 +50,8 @@ namespace TorrStreamTorrServer.Utp
             Uri = uri;
             this.utp = utp;
             this.createTcp = createTcp;
-            endPoint = new IPEndPoint(IPAddress.Parse(uri.Host), uri.Port);
+            // У ipv6:// Host в квадратных скобках
+            endPoint = new IPEndPoint(IPAddress.Parse(uri.Host.Trim('[', ']')), uri.Port);
             AddressBytes = endPoint.Address.GetAddressBytes();
         }
 
@@ -67,7 +68,9 @@ namespace TorrStreamTorrServer.Utp
         /// <summary>Подключились пробивкой NAT (BEP 55, Holepunch.cs)</summary>
         public bool Punched { get; private set; }
 
-        bool UtpUsable => utp != null && utp.Enabled && utp.Status == ListenerStatus.Listening;
+        // UDP-сокет uTP — на IPv4: IPv6-пиры — только по TCP
+        bool UtpUsable => utp != null && utp.Enabled && utp.Status == ListenerStatus.Listening
+            && endPoint.AddressFamily == AddressFamily.InterNetwork;
 
         public async ReusableTask ConnectAsync()
         {

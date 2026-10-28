@@ -26,7 +26,7 @@ namespace TorrStreamTorrServer
 
         public async ReusableTask<Socket> ConnectAsync(Uri uri, CancellationToken token)
         {
-            var endPoint = new IPEndPoint(IPAddress.Parse(uri.Host), uri.Port);
+            var endPoint = new IPEndPoint(IPAddress.Parse(uri.Host.Trim('[', ']')), uri.Port);   // у ipv6:// — в скобках
             var socket = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             using (var cts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {

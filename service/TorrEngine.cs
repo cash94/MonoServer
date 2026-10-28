@@ -95,6 +95,10 @@ namespace TorrStreamTorrServer
         public readonly Dictionary<string, string> Trackers = new Dictionary<string, string>();
         public long LastReportMs;
         public bool InfoLogged;
+        // Сохранённые пиры (SavedPeers.cs): сколько дали при открытии и сколько подключилось
+        public int Saved, SavedConnected;
+        public int V6Connected;
+        public long LastPeerSnapshotMs;
     }
 
     public class TorrReader
@@ -137,6 +141,7 @@ namespace TorrStreamTorrServer
         ClientEngine engine;
         MemoryStorage storage;
         DhtBootstrap dhtBoot;
+        SavedPeers savedPeers;
         // uTP: общий с DHT UDP-сокет на порту пиров и uTP поверх него (Utp/)
         SharedUdpSocket udp;
         UtpPeerConnectionListener utp;
@@ -226,6 +231,7 @@ namespace TorrStreamTorrServer
                 SaveSettings();
             }
             LoadDb();
+            savedPeers = new SavedPeers(Path.Combine(dataDir, "peers.json"), log);
             trackers = new TrackerList(Path.Combine(dataDir, "trackers_best_ip.txt"), log);
             if (Settings.RetrackersMode == 1) trackers.RefreshInBackground();
             dhtBoot = new DhtBootstrap(cacheDir, log);
@@ -268,7 +274,7 @@ namespace TorrStreamTorrServer
                 CacheDirectory = cacheDir,
                 DiskCacheBytes = 0,      // MemoryStorage — сам кэш
                 UsePartialFiles = false,
-                ListenEndPoints = new Dictionary<string, IPEndPoint> { { "ipv4", new IPEndPoint(IPAddress.Any, port) } },
+                ListenEndPoints = PeerListenEndPoints(port),
                 DhtEndPoint = Settings.EnableDHT ? new IPEndPoint(IPAddress.Any, port) : null,
                 // Шифруем только рукопожатие: от провайдера этого хватает, а RC4 на
                 // всём потоке — лишняя нагрузка на процессор телевизора
@@ -301,14 +307,58 @@ namespace TorrStreamTorrServer
             var factories = Factories.Default.WithPieceWriterCreator(_ => storage)
                 .WithDhtCreator(dhtBoot.Create)
                 .WithDhtListenerCreator(_ => new SharedUdpDhtListener(udp))
-                .WithPeerConnectionListenerCreator(endPoint => new CompositePeerListener(new PeerConnectionListener(endPoint), utp))
+                // IPv6 — свой слушатель (только IPv6, Ipv6PeerListener.cs); uTP — только у
+                // IPv4: его UDP-сокет общий и один (на IPv4)
+                .WithPeerConnectionListenerCreator(endPoint => endPoint.AddressFamily == AddressFamily.InterNetworkV6
+                    ? new CompositePeerListener(new Ipv6PeerListener(endPoint), null)
+                    : new CompositePeerListener(new PeerConnectionListener(endPoint), utp))
                 .WithPeerConnectionCreator("ipv4", PeerConnection)
-                .WithPeerConnectionCreator("ipv6", PeerConnection);
+                // IPv6 выключен — к IPv6-пирам не подключаемся (null MonoTorrent пропускает)
+                .WithPeerConnectionCreator("ipv6", uri => Settings.EnableIPv6 ? PeerConnection(uri) : null);
             // HTTP-трекеры и веб-сиды — через свой обработчик службы, если он есть (Http.cs):
             // на Android штатный HttpClient не умеет HTTPS
             if (Http.HandlerFactory != null)
                 factories = factories.WithHttpClientCreator(family => Http.Client(TimeSpan.FromSeconds(30), family));
             return new ClientEngine(b.ToSettings(), factories);
+        }
+
+        /// <summary>
+        /// Приём пиров: IPv4 и, если включено и система умеет, IPv6 на том же порту
+        /// (Ipv6PeerListener — только IPv6, с IPv4 не спорит). Не открылся — MonoTorrent
+        /// помечает его PortNotFree и работает дальше без него
+        /// </summary>
+        Dictionary<string, IPEndPoint> PeerListenEndPoints(int port)
+        {
+            var result = new Dictionary<string, IPEndPoint> { { "ipv4", new IPEndPoint(IPAddress.Any, port) } };
+            if (!Settings.EnableIPv6) log("IPv6 выключен (EnableIPv6)");
+            else if (!Socket.OSSupportsIPv6) log("IPv6: система не поддерживает — только IPv4");
+            else
+            {
+                result["ipv6"] = new IPEndPoint(IPAddress.IPv6Any, port);
+                log("IPv6: приём пиров на [::]:" + port + (HasGlobalIPv6() ? "" : " (глобального IPv6-адреса нет — пиры по IPv6 вряд ли дойдут)"));
+            }
+            return result;
+        }
+
+        /// <summary>Есть ли у машины публичный IPv6 (не link-local, не ULA fc00::/7)</summary>
+        static bool HasGlobalIPv6()
+        {
+            try
+            {
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                    foreach (var a in ni.GetIPProperties().UnicastAddresses)
+                    {
+                        var ip = a.Address;
+                        if (ip.AddressFamily != AddressFamily.InterNetworkV6 || IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) continue;
+                        if ((ip.GetAddressBytes()[0] & 0xFE) == 0xFC) continue;
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
         }
 
         IPeerConnection PeerConnection(Uri uri)
@@ -664,8 +714,17 @@ namespace TorrStreamTorrServer
                     {
                         lock (d) { d.Fails.TryGetValue(a.Reason.ToString(), out int n); d.Fails[a.Reason.ToString()] = n + 1; }
                         e.Pool.MarkTried(a.Peer?.ConnectionUri);
+                        savedPeers.Failed(e.Hash, a.Peer?.ConnectionUri, a.Reason);
                     };
-                    m.PeerConnected += (s, a) => e.Pool.MarkTried(a.Peer?.Uri);
+                    m.PeerConnected += (s, a) =>
+                    {
+                        e.Pool.MarkTried(a.Peer?.Uri);
+                        bool saved = a.Peer?.ConnectionDirection == Direction.Outgoing && savedPeers.IsSaved(e.Hash, a.Peer.Uri);
+                        bool v6 = a.Peer?.Uri?.Scheme == "ipv6";
+                        if (saved || v6) lock (d) { if (saved) d.SavedConnected++; if (v6) d.V6Connected++; }
+                    };
+                    // Сколько дал пир — для списка сохранённых (и у отключённых за сессию)
+                    m.PeerDisconnected += (s, a) => savedPeers.Seen(e.Hash, a.Peer);
                     m.TrackerManager.AnnounceComplete += (s, a) =>
                     {
                         int peers = 0;
@@ -681,6 +740,13 @@ namespace TorrStreamTorrServer
                 // Движок запустится с этим торрентом — и DHT с узлами из кэша
                 if (!engine.IsRunning && Settings.EnableDHT) await Task.Run(() => dhtBoot.PrepareCache()).ConfigureAwait(false);
                 if (m.State == TorrentState.Stopped || m.State == TorrentState.Error) await m.StartAsync().ConfigureAwait(false);
+                // Сохранённые с прошлого раза пиры — в начало очереди, до ответа трекеров
+                int fed = savedPeers.Feed(engine, m, e.Hash);
+                if (fed > 0)
+                {
+                    lock (e.Diag) { e.Diag.Saved = fed; e.Diag.SavedConnected = 0; }
+                    log(e.Hash + ": сохранённых пиров " + fed + " — подключаюсь сразу");
+                }
                 log(e.Hash + ": открыт" + (m.HasMetadata ? "" : ", жду метаданные"));
                 _ = WatchInfoAsync(e, m);
             }
@@ -910,6 +976,8 @@ namespace TorrStreamTorrServer
             await CloseAsync(e, -1).ConfigureAwait(false);
             lock (sync) entries.Remove(e.Hash);
             if (e.InDb) SaveDb();
+            savedPeers.Forget(e.Hash);
+            savedPeers.Save();
             try
             {
                 var meta = Path.Combine(cacheDir, "metadata");
@@ -1111,6 +1179,8 @@ namespace TorrStreamTorrServer
             if (store != null) store.Dispose();
             if (m != null)
             {
+                // Кто был подключён до конца — в список сохранённых пиров
+                await SnapshotPeersAsync(e, m, true).ConfigureAwait(false);
                 try
                 {
                     // Ответ трекеров на «stopped» ждём недолго: пока идёт закрытие,
@@ -1213,10 +1283,16 @@ namespace TorrStreamTorrServer
             long now = Now();
             var reports = new List<string>();
             var rotate = new List<KeyValuePair<TorrEntry, bool>>();
+            var snapshot = new List<KeyValuePair<TorrEntry, TorrentManager>>();
             lock (sync)
             {
                 foreach (var e in entries.Values)
                 {
+                    if (e.Manager != null && e.Manager.HasMetadata && now - e.OpenedMs >= SavedPeers.SnapshotMs && now - e.Diag.LastPeerSnapshotMs >= SavedPeers.SnapshotMs)
+                    {
+                        e.Diag.LastPeerSnapshotMs = now;
+                        snapshot.Add(new KeyValuePair<TorrEntry, TorrentManager>(e, e.Manager));
+                    }
                     if (e.Manager != null && e.Manager.HasMetadata && (e.Manager.State == TorrentState.Downloading || e.Manager.State == TorrentState.Seeding))
                         rotate.Add(new KeyValuePair<TorrEntry, bool>(e, NeedsDownload(e)));
                     if (e.Manager != null)
@@ -1245,6 +1321,7 @@ namespace TorrStreamTorrServer
                 if (kv.Key.Manager.State != TorrentState.Downloading) continue;
                 try { kv.Key.Pool.Tick(kv.Key.Manager); } catch (Exception ex) { log(kv.Key.Hash + ": запас пиров — " + ex.Message); }
             }
+            foreach (var kv in snapshot) _ = SnapshotPeersAsync(kv.Key, kv.Value, false);
             foreach (var kv in idle)
             {
                 var e = kv.Key;
@@ -1294,6 +1371,8 @@ namespace TorrStreamTorrServer
                 sb.Append(" · подключено ").Append(m.OpenConnections).Append(", подключаются ").Append(Connecting(m)).Append(", ждут ").Append(m.Peers.Available)
                   .Append(", в запасе службы ").Append(e.Pool.Extra).Append(" (подложено ").Append(e.Pool.Fed).Append(')')
                   .Append(", сидов ").Append(m.Peers.Seeds);
+                if (d.Saved > 0) sb.Append(" · сохранённых ").Append(d.Saved).Append(", подключились ").Append(d.SavedConnected);
+                if (e.Pool.V6Known > 0 || d.V6Connected > 0) sb.Append(" · IPv6: адресов ").Append(e.Pool.V6Known).Append(", подключались ").Append(d.V6Connected);
                 if (d.Fails.Count > 0)
                     sb.Append(" · не подключились: ").Append(string.Join(", ", d.Fails.Select(kv => kv.Key + " " + kv.Value)));
                 if (d.Trackers.Count > 0)
@@ -1311,7 +1390,28 @@ namespace TorrStreamTorrServer
         public void StopAll()
         {
             try { idleTimer?.Dispose(); } catch { }
+            // Пиры открытых торрентов — в список сохранённых, пока движок их держит
+            try
+            {
+                var open = List().Where(x => x.Manager != null).Select(x => SnapshotPeersAsync(x, x.Manager, true)).ToArray();
+                Task.WaitAll(open, 3000);
+            }
+            catch { }
             try { engine?.StopAllAsync(TimeSpan.FromSeconds(5)).Wait(8000); } catch { }
+        }
+
+        /// <summary>Подключённые сейчас — в сессию SavedPeers, и новый список на диск</summary>
+        async Task SnapshotPeersAsync(TorrEntry e, TorrentManager m, bool closing)
+        {
+            try
+            {
+                var peers = m.GetPeersAsync();
+                if (await Task.WhenAny(peers, Task.Delay(2000)).ConfigureAwait(false) == peers)
+                    foreach (var p in await peers.ConfigureAwait(false)) savedPeers.Seen(e.Hash, p);
+                savedPeers.Commit(e.Hash, closing);
+                savedPeers.Save();
+            }
+            catch (Exception ex) { log(e.Hash + ": сохранённые пиры — " + ex.Message); }
         }
 
         // ==================== читатели ====================

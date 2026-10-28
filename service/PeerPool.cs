@@ -39,6 +39,8 @@ namespace TorrStreamTorrServer
         /// <summary>Сколько адресов подложено в MonoTorrent</summary>
         public int Fed { get; private set; }
         public int Known { get { lock (sync) return untried.Count + tried.Count; } }
+        /// <summary>Сколько IPv6-адресов пришло (от трекеров, DHT, PEX) — для отчёта</summary>
+        public int V6Known { get; private set; }
 
         static string Key(Uri u) { return u == null ? null : u.Host + ":" + u.Port; }
 
@@ -57,6 +59,7 @@ namespace TorrStreamTorrServer
                     }
                     untried[k] = p;
                     order.Enqueue(k);
+                    if (p.ConnectionUri.Scheme == "ipv6") V6Known++;
                 }
         }
 

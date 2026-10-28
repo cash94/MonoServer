@@ -599,7 +599,7 @@ namespace TorrStreamTorrServer
             foreach (var p in Connected(m))
             {
                 var uri = p.Uri;
-                if (uri == null || !IPAddress.TryParse(uri.Host, out var ip)) continue;
+                if (uri == null || !IPAddress.TryParse(uri.Host.Trim('[', ']'), out var ip)) continue;
                 if (!Same(ip, ep.Address)) continue;
                 if (uri.Port == ep.Port || ListenPort(p) == ep.Port) return p;
             }
@@ -638,7 +638,7 @@ namespace TorrStreamTorrServer
         internal static IPEndPoint ListenEndPoint(PeerId p, bool knownOnly = false)
         {
             var uri = p.Uri;
-            if (uri == null || !IPAddress.TryParse(uri.Host, out var ip)) return null;
+            if (uri == null || !IPAddress.TryParse(uri.Host.Trim('[', ']'), out var ip)) return null;
             if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
             int? port = knownOnly ? KnownListenPort(p) : ListenPort(p);
             return port == null ? null : new IPEndPoint(ip, port.Value);

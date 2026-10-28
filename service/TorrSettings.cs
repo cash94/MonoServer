@@ -23,6 +23,10 @@ namespace TorrStreamTorrServer
         public bool EnableUPNP = true;
         // uTP — пиры по UDP (Utp/). У TorrServer это DisableUTP — понимаем и его
         public bool EnableUTP = true;
+        // IPv6-пиры, как EnableIPv6 у TorrServer (у него по умолчанию выключено): приём
+        // на [::] и исходящие по TCP. Трекерам MonoTorrent шлёт анонс и по IPv6 —
+        // без приёма на IPv6 те пиры к нам подключиться не могли. Меняется после перезапуска
+        public bool EnableIPv6 = true;
         public int DownloadRateLimit;           // КБ/с, 0 — без ограничения
         public int UploadRateLimit;
         public int RetrackersMode = 1;          // 1 — добавлять ретрекеры к magnet
@@ -91,6 +95,7 @@ namespace TorrStreamTorrServer
                     case "EnableUPNP": EnableUPNP = o.Bool(kv.Key) ?? EnableUPNP; break;
                     case "EnableUTP": EnableUTP = o.Bool(kv.Key) ?? EnableUTP; break;
                     case "DisableUTP": if (!o.ContainsKey("EnableUTP")) EnableUTP = !(o.Bool(kv.Key) ?? !EnableUTP); break;
+                    case "EnableIPv6": EnableIPv6 = o.Bool(kv.Key) ?? EnableIPv6; break;
                     case "DownloadRateLimit": DownloadRateLimit = (int)Clamp(o.Num(kv.Key) ?? 0, 0, int.MaxValue / 1024); break;
                     case "UploadRateLimit": UploadRateLimit = (int)Clamp(o.Num(kv.Key) ?? 0, 0, int.MaxValue / 1024); break;
                     case "RetrackersMode": RetrackersMode = (int)Clamp(o.Num(kv.Key) ?? RetrackersMode, 0, 3); break;
@@ -136,6 +141,7 @@ namespace TorrStreamTorrServer
                 .Prop("EnableUPNP", EnableUPNP)
                 .Prop("EnableUTP", EnableUTP)
                 .Prop("DisableUTP", !EnableUTP)
+                .Prop("EnableIPv6", EnableIPv6)
                 .Prop("DownloadRateLimit", DownloadRateLimit)
                 .Prop("UploadRateLimit", UploadRateLimit)
                 .Prop("RetrackersMode", RetrackersMode)

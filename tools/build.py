@@ -14,7 +14,9 @@ MonoServer-Tizen.wgt — гибрид, как TorrServer от no-cover/torr-stre
 Studio) своим сертификатом Samsung — он привязан к DUID телевизора.
 
 --linux — ещё MonoServer-linux-x64.tar.gz и MonoServer-linux-arm64.tar.gz:
-та же служба консольной программой (service/pc), с .NET внутри.
+та же служба консольной программой (service/pc), с .NET внутри; и
+MonoServer-linux-musl-x64.tar.gz, MonoServer-linux-musl-arm64.tar.gz — для
+систем на musl (Alpine, OpenWRT), без ICU (InvariantGlobalization).
 
 Результат — <имя>_<версия> и копия с постоянным именем. Нужен .NET SDK 8+
 (Tizen.NET.Sdk и MonoTorrent dotnet скачает сам).
@@ -109,12 +111,18 @@ def build_wgt(version, out, work):
 
 def build_linux(version, out, work):
     """Служба консольной программой с .NET внутри — архив с правом на запуск"""
-    for rid in ('linux-x64', 'linux-arm64'):
+    for rid in ('linux-x64', 'linux-arm64', 'linux-musl-x64', 'linux-musl-arm64'):
         pub = os.path.join(work, 'linux-' + rid)
+        extra = []
+        if '-musl-' in rid:
+            # На OpenWRT ICU нет, на Alpine — отдельный пакет: культура только
+            # инвариантная. PredefinedCulturesOnly=false — LiteDB создаёт культуру
+            # по сохранённому в базе LCID, в инвариантном режиме это иначе исключение
+            extra = ['-p:InvariantGlobalization=true', '-p:PredefinedCulturesOnly=false']
         subprocess.check_call(['dotnet', 'publish', os.path.join(SERVICE, 'pc'), '-c', 'Release', '-r', rid,
                                '--self-contained', 'true', '-p:PublishSingleFile=true',
                                '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=None',
-                               '-nologo', '-v', 'q', '-o', pub])
+                               '-nologo', '-v', 'q', '-o', pub] + extra)
         name = 'MonoServer-' + rid
         target = os.path.join(out, '%s_%s.tar.gz' % (name, version))
         with tarfile.open(target, 'w:gz') as tar:
@@ -159,7 +167,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--version', help='версия x.y.z (по умолчанию из app/config.xml)')
     ap.add_argument('--out', default=os.path.join(ROOT, 'dist'))
-    ap.add_argument('--linux', action='store_true', help='ещё архивы для Linux (x64, arm64)')
+    ap.add_argument('--linux', action='store_true', help='ещё архивы для Linux (x64, arm64; glibc и musl)')
     ap.add_argument('--windows', action='store_true', help='ещё архивы для Windows (x64, arm64)')
     args = ap.parse_args()
     if args.version and not re.match(r'^\d+\.\d+\.\d+$', args.version):

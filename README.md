@@ -90,6 +90,25 @@ ARM — `MonoServer-linux-arm64.tar.gz` (64-битная система). Пор
 случайный, он записан в `settings.json` (`PeersListenPort`) — откройте его в
 брандмауэре, если нужны входящие соединения.
 
+### Alpine, OpenWRT (musl)
+
+`MonoServer-linux-musl-x64.tar.gz` и `-musl-arm64` — для систем на musl вместо
+glibc (обычная сборка там не запустится). Скрипт сам выбирает её при скачивании.
+.NET внутри, но ему нужны libstdc++ и libgcc, а для HTTPS — OpenSSL; ICU не
+нужен (сборка без него, культура — только инвариантная):
+
+```
+apk add libstdc++ libgcc openssl bash          # Alpine
+opkg update && opkg install libstdcpp6 libgcc1 libopenssl3 bash   # OpenWRT 23.05
+```
+
+Программа весит ~70 МБ, кэш и данные — сколько задано в настройках: на роутере
+кладите её на USB-диск или extroot. Под MIPS .NET не работает, 32-битной
+ARM-сборки (linux-musl-arm) в релизах нет. systemd на этих
+системах нет, поэтому `install` не поставит службу — запуск `./monoserver.sh run`
+или вручную, как выше (на OpenWRT — строкой в `/etc/rc.local`, на Alpine —
+службой OpenRC).
+
 ## Windows
 
 `MonoServer-windows-x64.zip` (или `-arm64`) из [релизов](../../releases/latest) —

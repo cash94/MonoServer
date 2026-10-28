@@ -17,7 +17,8 @@
 # Порт проверяется: занят — скрипт скажет кем и спросит другой. Программа
 # MonoServer ищется рядом со скриптом (так лежат файлы в архиве
 # MonoServer-linux-*.tar.gz); нет её — скрипт предложит скачать последний
-# релиз под архитектуру (x64 или arm64). Служба запускается при загрузке
+# релиз под архитектуру (x64 или arm64; на musl — Alpine, OpenWRT — сборку
+# linux-musl). Служба запускается при загрузке
 # компьютера; программа и скрипт для неё копируются в постоянный каталог, так
 # что архив после установки можно удалить. Служба прежнего имени
 # torrserver-tizen (до 1.0.18) при install/update переносится сюда — с её
@@ -152,6 +153,8 @@ download() {
         aarch64|arm64) arch=arm64 ;;
         *) echo "Архитектура $(uname -m) не поддерживается: есть сборки для x86_64 и aarch64 (64-битная ARM)." >&2; return 1 ;;
     esac
+    # Alpine, OpenWRT — musl вместо glibc: им своя сборка
+    if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 || ldd --version 2>&1 | grep -qi musl; then arch="musl-$arch"; fi
     asset="MonoServer-linux-$arch.tar.gz"
     url="https://github.com/$REPO/releases/latest/download/$asset"
     tmp="$(mktemp -d)" || return 1

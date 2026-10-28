@@ -3,6 +3,7 @@
 // Ctrl+C — остановить
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace TorrStreamTorrServer
@@ -17,12 +18,25 @@ namespace TorrStreamTorrServer
             // MONOSERVER_STORE=json — как на Tizen, проверить то хранилище без телевизора
             if (Environment.GetEnvironmentVariable("MONOSERVER_STORE") != "json")
                 Accounts.StoreFactory = (dir, log) => new LiteDbAccountsStore(dir, log);
+            Action<string> journal = m => Console.WriteLine(DateTime.Now.ToString("HH:mm:ss ") + m);
             var host = new TorrServerHost();
-            host.Start(data, port, m => Console.WriteLine(DateTime.Now.ToString("HH:mm:ss ") + m));
+            host.Start(data, port, journal);
             var stop = new ManualResetEvent(false);
             Console.CancelKeyPress += (s, e) => { e.Cancel = true; stop.Set(); };
-            stop.WaitOne();
-            host.Stop();
+            // systemd (stop, restart, monoserver.sh update) останавливает SIGTERM: без
+            // обработчика .NET завершал процесс сразу (код 143, «Failed» в systemctl),
+            // host.Stop не вызывался — не сохранялись кэш DHT и последние изменения базы
+            using (PosixSignalRegistration.Create(PosixSignal.SIGTERM, c => { c.Cancel = true; stop.Set(); }))
+            {
+                stop.WaitOne();
+                journal("остановка");
+                // Движок закрывает торренты (до 8 с) и пишет кэш DHT; завис — выходим всё равно
+                var done = new Thread(() => { try { host.Stop(); } catch { } }) { IsBackground = true };
+                done.Start();
+                done.Join(15000);
+            }
+            Console.Out.Flush();
+            Environment.Exit(0);
         }
     }
 }

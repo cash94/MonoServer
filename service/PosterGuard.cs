@@ -7,7 +7,8 @@
 //    JPEG, PNG, GIF или WebP — по сигнатуре, как декодер TorrServer отличает
 //    картинку от HTML/SVG;
 //  - сервер не ответил (сеть, таймаут) — «можно, но не проверено»: новый
-//    постер берём, только если прежнего не было (как в TorrServer).
+//    постер берём, только если прежнего не было (как в TorrServer). Так же —
+//    если сервер не пускает саму службу (401, 403, 429).
 using System;
 using System.Linq;
 using System.Net.Http;
@@ -62,7 +63,13 @@ namespace TorrStreamTorrServer
                         return R(true, false, "сервер не ответил");
                     using (var resp = await get.ConfigureAwait(false))
                     {
-                        if (!resp.IsSuccessStatusCode) return R(false, false, "ответ " + (int)resp.StatusCode);
+                        int code = (int)resp.StatusCode;
+                        // 401, 403, 429 — хостинг не пускает саму службу (защита от
+                        // хотлинка, Cloudflare к адресам серверов), а плеер и браузер
+                        // картинку получают. Как сеть: можно, но не проверено
+                        if (code == 401 || code == 403 || code == 429)
+                            return R(true, false, "ответ " + code + " " + new Uri(link).Host);
+                        if (!resp.IsSuccessStatusCode) return R(false, false, "ответ " + code + " " + new Uri(link).Host);
                         var head = new byte[16];
                         int got = 0;
                         using (var s = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))

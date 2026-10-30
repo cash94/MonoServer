@@ -392,7 +392,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
       <label class="switch-row"><input type="checkbox" id="acc-require"><span><b>Потоки и API — только со входом</b>
         <small>TorrStream и Lampa входят логином и паролем пользователя (как к TorrServer с паролем), плееры — по ссылке с ключом. Выключено — как раньше: без пароля, со списком торрентов admin.</small></span></label>
       <label class="switch-row"><input type="checkbox" id="acc-lan"><span><b>Домашняя сеть — без входа</b>
-        <small>Устройства из локальной сети (и это же устройство) смотрят без пароля, со списком admin, а веб-интерфейс открывают сразу как admin, без формы входа. Работает и при выключенном «только со входом». За nginx на этой же машине оставляйте включённым, только если он передаёт X-Forwarded-For: иначе все запросы из интернета выглядят локальными.</small></span></label>
+        <small>Устройства из локальной сети (и это же устройство) смотрят без пароля, со списком admin, а веб-интерфейс открывают сразу как admin, без формы входа. Работает и при выключенном «только со входом». За nginx (на этой машине или на VPS через WireGuard/VPN) оставляйте включённым, только если он передаёт X-Forwarded-For: иначе все запросы из интернета выглядят локальными.</small></span></label>
       <div class="muted" id="acc-msg" style="margin-top:6px"></div>
     </div>
 
@@ -996,6 +996,16 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     var f = d.Found || {}, html = '<div class="muted" style="margin-top:10px;font-size:12px">Найдено пиров: трекеры ' + f.tracker + ', DHT ' + f.dht + ', PEX ' + f.pex + ', локальная сеть ' + f.lpd;
     html += '<br>Медленных пиров заменено: ' + (d.RotationSupported === false ? 'недоступно (нет внутренностей MonoTorrent)' : (d.Rotated || 0));
     html += '<br>Запас адресов службы: известно ' + (d.PoolKnown || 0) + ', ещё не опробовано ' + (d.PoolExtra || 0) + ', подложено в движок ' + (d.PoolFed || 0);
+    var st = d.Start;
+    if (st) {
+      var sec = function (ms) { return ms < 0 ? '—' : (ms / 1000).toFixed(1).replace('.', ',') + ' с'; };
+      html += '<br>Старт: первый пир ' + sec(st.FirstPeer) + ', метаданные ' + (st.Metadata === 0 ? 'из кэша' : sec(st.Metadata)) +
+        ', запрос данных ' + sec(st.FirstRead) + ', первый байт ' + sec(st.FirstByte) + ', ' + Math.round((st.BufferBytes || 0) / 1048576) + ' МБ подряд ' + sec(st.Buffer);
+    }
+    if (d.Snubs != null) html += '<br>Пиры «не шлют»: случаев ' + d.Snubs + ', блоков отдано другим ' + (d.SnubCancelled || 0) + ', сейчас ' + (d.SnubbedNow || 0);
+    if (d.Boosts) html += '<br>Повторных анонсов (мало пиров): ' + d.Boosts;
+    if (d.PlainRetries) html += '<br>Повторно без шифрования: ' + d.PlainRetries + ', подключились ' + (d.PlainRetryConnected || 0);
+    if (d.Guard) html += '<br>Отказов в вытесненных кусках (вся служба): ' + (d.Guard.Supported === false ? 'недоступно' : d.Guard.Rejected + ', без ответа ' + d.Guard.Silent + ', не успели ' + d.Guard.Late);
     var fails = [];
     for (var k in d.Fails) fails.push(k + ' ' + d.Fails[k]);
     if (fails.length) html += '<br>Не подключились: ' + esc(fails.join(', '));

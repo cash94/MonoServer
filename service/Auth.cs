@@ -51,14 +51,21 @@ namespace TorrStreamTorrServer
 
         long Ms() { return clock.ElapsedMilliseconds; }
 
-        /// <summary>Адрес клиента: за nginx на этой же машине — последний из X-Forwarded-For</summary>
+        /// <summary>
+        /// Адрес клиента: за прокси — последний из X-Forwarded-For (его дописывает сам
+        /// прокси, клиент подделать не может). Прокси — на этой машине (127.0.0.1) или в
+        /// домашней сети и VPN: nginx на VPS → WireGuard → служба дома, запросы приходят
+        /// с 10.x. Раньше заголовок брался только от 127.0.0.1, и за таким VPS весь
+        /// интернет был «домашней сетью» (LanWithoutAuth — без пароля). От публичных
+        /// адресов заголовок не берём: его прислал бы сам клиент
+        /// </summary>
         static string ClientIp(TcpClient client, Request req)
         {
             IPAddress ip = null;
             try { ip = ((IPEndPoint)client.Client.RemoteEndPoint).Address; } catch { }
             if (ip != null && ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
             string s = ip != null ? ip.ToString() : "?";
-            if (ip != null && IPAddress.IsLoopback(ip))
+            if (ip != null && IsLan(s))
             {
                 string xff = req.Header("X-Forwarded-For") ?? req.Header("X-Real-IP");
                 if (!string.IsNullOrEmpty(xff))

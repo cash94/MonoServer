@@ -204,9 +204,34 @@ namespace TorrStreamTorrServer.Utp
         {
             var c = active ?? throw new InvalidOperationException("Не подключено");
             int n = await c.ReceiveAsync(buffer).ConfigureAwait(false);
+            // Пир закрыл сам (FIN, а не RST) — для повтора без шифрования (PlainTextRetry.cs)
+            if (n == 0) NoteClosedByPeer(Uri);
             // Следом ядро декодирует сообщение в этом же потоке — так ut_holepunch узнаёт отправителя
             HolePunch.Received(this);
             return n;
+        }
+
+        // Адрес → когда пир закрыл исходящее соединение сам. Не прошло рукопожатие
+        // шифрования (MSE), и пир закрыл вежливо — у него, скорее всего, шифрование
+        // выключено, а MonoTorrent 3.0.2 без шифрования не повторяет. Фейковые пиры
+        // (принимают TCP и сразу RST) сюда не попадают
+        static readonly ConcurrentDictionary<string, long> closedByPeer = new ConcurrentDictionary<string, long>();
+        static readonly Stopwatch Clock = Stopwatch.StartNew();
+        const long ClosedTtlMs = 30000;
+
+        static void NoteClosedByPeer(Uri uri)
+        {
+            long now = Clock.ElapsedMilliseconds;
+            if (closedByPeer.Count > 4096)
+                foreach (var kv in closedByPeer)
+                    if (now - kv.Value > ClosedTtlMs) closedByPeer.TryRemove(kv.Key, out _);
+            closedByPeer[uri.ToString()] = now;
+        }
+
+        /// <summary>Пир по этому адресу только что сам закрыл наше соединение (FIN); запись снимается</summary>
+        public static bool TakeClosedByPeer(Uri uri)
+        {
+            return uri != null && closedByPeer.TryRemove(uri.ToString(), out long at) && Clock.ElapsedMilliseconds - at <= ClosedTtlMs;
         }
 
         public ReusableTask<int> SendAsync(Memory<byte> buffer)

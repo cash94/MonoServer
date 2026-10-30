@@ -119,7 +119,9 @@ namespace TorrStreamTorrServer
             if (access != null)
             {
                 a.RequireAuth = B(access, "require_auth", false);
-                a.LanWithoutAuth = B(access, "lan_without_auth", true);
+                // Запись до 1.0.32 (без версии) — галочку включить один раз (Accounts.AccessVersion)
+                if (L(access, "version") >= Accounts.AccessVersion) a.LanWithoutAuth = B(access, "lan_without_auth", true);
+                else { a.LanWithoutAuth = true; a.AccessUpgraded = !B(access, "lan_without_auth", true); }
             }
             var master = cfg.FindById("master");
             if (master != null)
@@ -188,7 +190,7 @@ namespace TorrStreamTorrServer
         {
             if (db == null) return;
             var cfg = db.GetCollection("config");
-            cfg.Upsert(new BsonDocument { ["_id"] = "access", ["require_auth"] = a.RequireAuth, ["lan_without_auth"] = a.LanWithoutAuth });
+            cfg.Upsert(new BsonDocument { ["_id"] = "access", ["version"] = Accounts.AccessVersion, ["require_auth"] = a.RequireAuth, ["lan_without_auth"] = a.LanWithoutAuth });
             var nodes = new BsonArray();
             foreach (var n in a.Nodes)
                 nodes.Add(new BsonDocument { ["id"] = n.Id, ["name"] = n.Name, ["url"] = n.Url, ["key"] = n.Key, ["max"] = n.Max, ["enabled"] = n.Enabled });

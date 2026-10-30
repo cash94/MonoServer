@@ -179,6 +179,12 @@ namespace TorrStreamTorrServer
         // Из домашней сети — без входа: потоки и API со списком admin, веб-интерфейс —
         // сразу admin (HttpApi.Identify). По умолчанию включено, действует и без RequireAuth
         public bool LanWithoutAuth = true;
+        // Версия записи «доступ» в базе. До 1.0.32 её не было, а галочку база писала
+        // всегда, со старым умолчанием false (при любой записи настроек), — новое
+        // умолчание 1.0.31 у обновившихся не действовало. Запись без версии — галочка
+        // включается один раз (AccessUpgraded), дальше — как выбрал пользователь
+        public const int AccessVersion = 2;
+        public bool AccessUpgraded;
         // Мастер-сервер
         public bool MasterEnabled;
         public int LocalMax = 5;            // зрителей здесь, дальше — на узлы; 0 — всех на узлы
@@ -260,6 +266,11 @@ namespace TorrStreamTorrServer
                 admin.Expires = 0;
                 PutUser(admin);
                 if (string.IsNullOrEmpty(NodeKey)) { NodeKey = RandomHex(16); PutConfig(); }
+                if (AccessUpgraded)
+                {
+                    PutConfig();
+                    log("доступ: «домашняя сеть — без входа» включена после обновления (снять можно в «Пользователи → Доступ»)");
+                }
             }
             flushTimer = new Timer(_ => Flush(), null, 15000, 15000);
             NewSetupCode();

@@ -22,6 +22,11 @@
 //     было 2–4 блока по 16 КБ: при задержке ~100 мс это ~0,5 МБ/с на пира, и
 //     скорость упиралась в это, сколько бы пиров ни было.
 // Позиции даёт TorrEngine (TorrEntry.Window), спрашиваем на каждом такте MonoTorrent.
+//   - пир «не шлёт» (snubbed, как в libtorrent): наши запросы у него висят, а блоков
+//     нет SnubMs — запросы окна у него отменяем (их сразу берут другие пиры), новые
+//     ему — по паре блоков за срочной зоной, пока не пришлёт блок. Иначе блоки,
+//     застрявшие у такого пира, ждали 40 с (StaleRequestTimeout MonoTorrent) или
+//     ротацию раз в 15 с, а «скачано подряд» от позиции стояло на них.
 //
 // MIT License, Copyright (C) 2006 Alan McGovern, Olivier Dufour — Permission is
 // hereby granted, free of charge, to any person obtaining a copy of this
@@ -57,6 +62,32 @@ namespace TorrStreamTorrServer
         const int AsManyAsPeerTakes = int.MaxValue;
         // Сколько блоков выбирать за раз (буфер PickPiece)
         const int PickBatch = 64;
+        // Тишина пира с нашими запросами, после которой он «не шлёт». У пира с очередью
+        // в десятки блоков даже на 50 КБ/с блок приходит раз в доли секунды
+        const long SnubMs = 5000;
+        // Пробных блоков такому пиру — за срочной зоной
+        const int SnubbedProbe = 2;
+        const long ForgetPeerMs = 60000;
+
+        sealed class PeerTrack
+        {
+            public long LastBlockMs = -1;     // последний принятый блок
+            public long WaitingSinceMs = -1;  // с какого такта у него наши запросы
+            public long SeenMs;
+            public bool Snubbed;
+        }
+
+        static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
+        readonly Dictionary<IRequester, PeerTrack> tracks = new Dictionary<IRequester, PeerTrack>();
+        long lastPruneMs;
+
+        /// <summary>Сколько раз пир попадал в «не шлёт» и сколько его блоков отдали другим (для /cache)</summary>
+        public int Snubs { get; private set; }
+        public int SnubCancelled { get; private set; }
+        /// <summary>Сейчас «не шлёт»</summary>
+        public int SnubbedNow { get; private set; }
+        /// <summary>То же по всем торрентам с запуска службы (/version → load)</summary>
+        public static int TotalSnubs, TotalSnubCancelled;
 
         readonly Func<ReadWindow> window;
         IMessageEnqueuer Enqueuer;
@@ -128,6 +159,7 @@ namespace TorrStreamTorrServer
             lastPrimary = w.Primary;
 
             var allPeers = peers.ToArray().OrderBy(t => -t.Peer.DownloadSpeed).ToArray();
+            CheckSnubbed(allPeers, w);
             var bitfield = GenerateAlreadyHaves();
             if (seeked && bitfield.FirstFalse(w.Primary, Math.Min(w.PrimaryEnd, w.Primary + HighPriorityCount - 1)) != -1)
             {
@@ -147,7 +179,7 @@ namespace TorrStreamTorrServer
                 otherAvailable[i] = peers[i].Available;
 
             // Срочное (кусок под позицией) — сначала у быстрых пиров
-            var fastestPeers = allPeers.Where(t => t.Peer.DownloadSpeed > 50 * 1024).ToArray();
+            var fastestPeers = allPeers.Where(t => t.Peer.DownloadSpeed > 50 * 1024 && !IsSnubbed(t.Peer)).ToArray();
             foreach (var supportsFastPeer in new[] { true, false })
                 for (int i = 0; i < 4; i++)
                     foreach (var peer in fastestPeers.Where(p => p.Peer.SupportsFastPeer == supportsFastPeer))
@@ -167,6 +199,14 @@ namespace TorrStreamTorrServer
 
         void AddRequests(IRequester peer, ReadOnlyBitField available, ReadOnlySpan<ReadOnlyBitField> allPeers, ReadWindow w)
         {
+            if (IsSnubbed(peer))
+            {
+                // Только проба за срочной зоной: пришлёт блок — снова как все (ValidatePiece)
+                int from = UrgentEnd(w) + 1;
+                if (from <= w.PrimaryEnd)
+                    AddRequests(peer, available, allPeers, from, w.PrimaryEnd, 1, SnubbedProbe, w);
+                return;
+            }
             AddRequests(peer, available, allPeers, w.Primary, UrgentEnd(w), 2, AsManyAsPeerTakes, w);
             if (w.Secondary != null)
                 foreach (int s in w.Secondary)
@@ -273,15 +313,69 @@ namespace TorrStreamTorrServer
         public void ReadToPosition(ITorrentManagerFile file, long position) { }
 
         public bool ValidatePiece(IRequester peer, PieceSegment blockInfo, out bool pieceComplete, HashSet<IRequester> peersInvolved)
-            => HighPriorityPicker.ValidatePiece(peer, blockInfo, out pieceComplete, peersInvolved);
+        {
+            bool ok = HighPriorityPicker.ValidatePiece(peer, blockInfo, out pieceComplete, peersInvolved);
+            if (ok && tracks.TryGetValue(peer, out var t))
+            {
+                t.LastBlockMs = Clock.ElapsedMilliseconds;
+                t.Snubbed = false;
+            }
+            return ok;
+        }
+
+        bool IsSnubbed(IRequester peer) => tracks.TryGetValue(peer, out var t) && t.Snubbed;
+
+        // На каждом такте, до раздачи запросов: кто из пиров с нашими запросами молчит SnubMs
+        void CheckSnubbed((IRequester Peer, ReadOnlyBitField Available)[] peers, ReadWindow w)
+        {
+            long now = Clock.ElapsedMilliseconds;
+            int snubbed = 0;
+            foreach (var (peer, _) in peers)
+            {
+                if (!tracks.TryGetValue(peer, out var t)) tracks[peer] = t = new PeerTrack();
+                t.SeenMs = now;
+                if (peer.AmRequestingPiecesCount <= 0)
+                {
+                    t.WaitingSinceMs = -1;
+                    if (t.Snubbed) snubbed++;
+                    continue;
+                }
+                if (t.WaitingSinceMs < 0) t.WaitingSinceMs = now;
+                if (!t.Snubbed && now - Math.Max(t.WaitingSinceMs, t.LastBlockMs) >= SnubMs)
+                {
+                    t.Snubbed = true;
+                    Snubs++;
+                    TotalSnubs++;
+                    // Без Fast Extension отмену пир может не исполнить и прислать блок
+                    // потом — такому только не даём новых срочных запросов: его блок
+                    // в срочной зоне второй копией возьмёт другой пир (до 2 на блок)
+                    if (peer.CanCancelRequests)
+                    {
+                        int n = CancelRequestsCount(peer, w.Primary, w.PrimaryEnd);
+                        SnubCancelled += n;
+                        TotalSnubCancelled += n;
+                    }
+                }
+                if (t.Snubbed) snubbed++;
+            }
+            SnubbedNow = snubbed;
+            if (now - lastPruneMs >= ForgetPeerMs)
+            {
+                lastPruneMs = now;
+                foreach (var gone in tracks.Where(kv => now - kv.Value.SeenMs > ForgetPeerMs).Select(kv => kv.Key).ToList())
+                    tracks.Remove(gone);
+            }
+        }
 
         public bool IsInteresting(IRequester peer, ReadOnlyBitField bitfield)
             => HighPriorityPicker.IsInteresting(peer, bitfield);
 
-        public void CancelRequests(IRequester peer, int startIndex, int endIndex)
+        public void CancelRequests(IRequester peer, int startIndex, int endIndex) => CancelRequestsCount(peer, startIndex, endIndex);
+
+        int CancelRequestsCount(IRequester peer, int startIndex, int endIndex)
         {
             if (HighPriorityPicker == null || Enqueuer == null)
-                return;
+                return 0;
             // Счётчик запросов пира расходится с блоками у PositionPicker: блоков
             // бывает больше, отмена каждого его уменьшает — и он уходил в минус.
             // AsSpan(0, минус) — ArgumentOutOfRange, CleanupSocket обрывался до
@@ -295,6 +389,7 @@ namespace TorrStreamTorrServer
             if (peer.AmRequestingPiecesCount < 0)
                 peer.AmRequestingPiecesCount = 0;
             Enqueuer.EnqueueCancellations(peer, cancellations.Slice(0, cancelled));
+            return cancelled;
         }
 
         public void RequestRejected(IRequester peer, PieceSegment blockInfo)

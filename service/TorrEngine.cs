@@ -78,6 +78,8 @@ namespace TorrStreamTorrServer
         public readonly PeerPool Pool = new PeerPool();
         // Файл, чьи начало и конец закреплены в PieceStore
         public ITorrentManagerFile PinnedFile;
+        // Какие куски просить (WindowRequester.cs) — для счётчиков «не шлёт» в /cache
+        public WindowRequester Requester;
 
         public bool Active => Manager != null;
         public bool HasInfo => Files.Count > 0;
@@ -99,6 +101,66 @@ namespace TorrStreamTorrServer
         public int Saved, SavedConnected;
         public int V6Connected;
         public long LastPeerSnapshotMs;
+        // Повтор без шифрования (PlainTextRetry.cs): адреса, поставленные на повтор, и сколько из них подключилось
+        public readonly HashSet<string> PlainRetried = new HashSet<string>();
+        public int PlainRetryConnected;
+        // Повторные анонсы, когда пиров мало (Boost в TorrEngine)
+        public int Boosts;
+        public long LastBoostMs = -1;
+
+        // Старт этого открытия — мс от OpenedMs, −1 — ещё не было: первый пир,
+        // метаданные (0 — были в кэше или .torrent), первый запрос данных, первый
+        // отданный байт, скачано подряд BufferBytes от места первого запроса (или до
+        // конца файла) — с BufferFrom, BufferNeed байт
+        public long FirstPeerMs = -1, MetaMs = -1, FirstReadMs = -1, FirstByteMs = -1, BufferMs = -1;
+        public long BufferFrom = -1, BufferNeed;
+        public long NextBufferCheckMs;
+        public bool StartLogged;
+
+        public void ResetStart()
+        {
+            FirstPeerMs = MetaMs = FirstReadMs = FirstByteMs = BufferMs = BufferFrom = -1;
+            BufferNeed = 0;
+            NextBufferCheckMs = 0;
+            StartLogged = false;
+        }
+    }
+
+    /// <summary>
+    /// Сколько занимает старт и перемотки — последние Keep значений по всем
+    /// торрентам, для /version (load) и проверки изменений загрузки
+    /// </summary>
+    public class LoadStats
+    {
+        const int Keep = 100;
+        readonly object sync = new object();
+        readonly Dictionary<string, List<long>> samples = new Dictionary<string, List<long>>();
+
+        public void Add(string name, long ms)
+        {
+            if (ms < 0) return;
+            lock (sync)
+            {
+                if (!samples.TryGetValue(name, out var l)) samples[name] = l = new List<long>();
+                l.Add(ms);
+                if (l.Count > Keep) l.RemoveAt(0);
+            }
+        }
+
+        /// <summary>{"имя": {"n", "median", "p90", "max"}} — мс</summary>
+        public void Write(JsonWriter w)
+        {
+            w.Obj();
+            lock (sync)
+                foreach (var kv in samples)
+                {
+                    var s = kv.Value.OrderBy(x => x).ToList();
+                    if (s.Count == 0) continue;
+                    w.Key(kv.Key).Obj().Prop("n", s.Count).Prop("median", s[s.Count / 2])
+                        .Prop("p90", s[Math.Min(s.Count - 1, s.Count * 9 / 10)]).Prop("max", s[s.Count - 1]).EndObj();
+                }
+            w.EndObj();
+        }
     }
 
     public class TorrReader
@@ -111,6 +173,9 @@ namespace TorrStreamTorrServer
         public long Limit = -1;
         public long Seq;
         public volatile bool Closed;
+        // Для замера ожидания: когда открыт, ждал ли данных, отдал ли уже байт
+        public long OpenedMs;
+        public bool Waited, GotByte;
     }
 
     public class TorrEngine
@@ -170,6 +235,18 @@ namespace TorrStreamTorrServer
             catch { return 0; }
         }
         const long PreloadKeepMs = 120000;
+        // Замер старта: «буфер готов» — столько подряд впереди первого читателя
+        const long BufferBytes = 8L << 20;
+        // Ожидание данных дольше этого — строкой в журнал (перемотки)
+        const long SlowWaitMs = 2000;
+        // Повторный анонс, когда пиров мало: не чаще раза в BoostEveryMs на торрент,
+        // трекеру — не чаще BoostTrackerMs и его min interval (без него MonoTorrent
+        // считает 3 минуты); первые BoostAfterOpenMs — ждём ответов на обычные анонсы
+        const long BoostEveryMs = 45000, BoostTrackerMs = 120000, BoostAfterOpenMs = 20000;
+
+        /// <summary>Старты и перемотки по всем торрентам (/version → load)</summary>
+        public readonly LoadStats Load = new LoadStats();
+        int boostsTotal;
         public static bool CanForgetPieces => MutableBitFieldProp != null && MainLoop != null;
 
         public TorrEngine(string dataDir, Action<string> log)
@@ -242,6 +319,14 @@ namespace TorrStreamTorrServer
             // ut_holepunch (BEP 55) и свой ut_pex — до первого соединения (Holepunch.cs, PeerExchange.cs)
             HolePunch.Register();
             PeerExchange.Register();
+            // Отказ в вытесненных кусках (RequestGuard.cs) — после HolePunch: ищет пира по его соединению
+            RequestGuard.HasPiece = (m, piece) =>
+            {
+                var store = Get(m.InfoHashes.V1OrV2.ToHex())?.Store;
+                return store == null || store.IsVerified(piece);
+            };
+            RequestGuard.Register();
+            if (!RequestGuard.Supported) log("внимание: внутренности MonoTorrent не найдены — пиру уйдут и вытесненные куски");
             if (!HolePunch.Supported) log("внимание: внутренности MonoTorrent не найдены — без ut_holepunch");
             if (!PeerExchange.Supported) log("внимание: внутренности MonoTorrent не найдены — PEX штатный MonoTorrent");
             try
@@ -276,8 +361,11 @@ namespace TorrStreamTorrServer
                 UsePartialFiles = false,
                 ListenEndPoints = PeerListenEndPoints(port),
                 DhtEndPoint = Settings.EnableDHT ? new IPEndPoint(IPAddress.Any, port) : null,
-                // Шифруем только рукопожатие: от провайдера этого хватает, а RC4 на
-                // всём потоке — лишняя нагрузка на процессор телевизора
+                // Порядок — что выбираем сами: у входящих (пир предложил оба варианта MSE)
+                // шифруется только рукопожатие — RC4 на всём потоке нагружает процессор
+                // телевизора. У исходящих выбирает пир, и выбирает почти всегда RC4 на
+                // всём потоке (раздача Debian: 64 из 65). Без RC4Full в списке они не
+                // подключатся: шифрование только рукопожатия отвергли 38 из 65
                 AllowedEncryption = new List<EncryptionType> { EncryptionType.RC4Header, EncryptionType.PlainText, EncryptionType.RC4Full },
                 MaximumConnections = 200,
                 // Подключений «в процессе» сразу. Большинство адресов с трекеров
@@ -655,6 +743,7 @@ namespace TorrStreamTorrServer
                 e.Error = null;
                 e.OpenedMs = Now();
                 e.LastActiveMs = Now();
+                lock (e.Diag) e.Diag.ResetStart();
                 e.Activation = ActivateAsync(e, magnet, torrent);
                 return e.Activation;
             }
@@ -690,7 +779,9 @@ namespace TorrStreamTorrServer
                     // Ретрекеры ngosang (TrackerList) — только здесь, в ссылку в базе не идут
                     if (Settings.RetrackersMode == 1) urls = urls.Concat(trackers.Current);
                     await AddTrackersAsync(e, m, urls).ConfigureAwait(false);
-                    await m.ChangePickerAsync(new WindowRequester(() => e.Window)).ConfigureAwait(false);
+                    var requester = new WindowRequester(() => e.Window);
+                    await m.ChangePickerAsync(requester).ConfigureAwait(false);
+                    e.Requester = requester;
                     m.PieceHashed += (s, a) =>
                     {
                         var store = e.Store;
@@ -712,7 +803,16 @@ namespace TorrStreamTorrServer
                     };
                     m.ConnectionAttemptFailed += (s, a) =>
                     {
-                        lock (d) { d.Fails.TryGetValue(a.Reason.ToString(), out int n); d.Fails[a.Reason.ToString()] = n + 1; }
+                        bool retry = false;
+                        lock (d)
+                        {
+                            d.Fails.TryGetValue(a.Reason.ToString(), out int n); d.Fails[a.Reason.ToString()] = n + 1;
+                            // MSE не прошло, а пир закрыл сам (FIN, не RST) — ещё раз без шифрования, один раз на адрес
+                            if (a.Reason == ConnectionFailureReason.EncryptionNegiotiationFailed && a.Peer?.ConnectionUri != null
+                                && HybridPeerConnection.TakeClosedByPeer(a.Peer.ConnectionUri))
+                                retry = d.PlainRetried.Add(a.Peer.ConnectionUri.ToString());
+                        }
+                        if (retry) PlainTextRetry.Retry(engine, m, a.Peer);
                         e.Pool.MarkTried(a.Peer?.ConnectionUri);
                         savedPeers.Failed(e.Hash, a.Peer?.ConnectionUri, a.Reason);
                     };
@@ -721,7 +821,14 @@ namespace TorrStreamTorrServer
                         e.Pool.MarkTried(a.Peer?.Uri);
                         bool saved = a.Peer?.ConnectionDirection == Direction.Outgoing && savedPeers.IsSaved(e.Hash, a.Peer.Uri);
                         bool v6 = a.Peer?.Uri?.Scheme == "ipv6";
-                        if (saved || v6) lock (d) { if (saved) d.SavedConnected++; if (v6) d.V6Connected++; }
+                        lock (d)
+                        {
+                            if (saved) d.SavedConnected++;
+                            if (v6) d.V6Connected++;
+                            if (a.Peer?.Uri != null && a.Peer.EncryptionType == EncryptionType.PlainText && d.PlainRetried.Contains(a.Peer.Uri.ToString()))
+                                d.PlainRetryConnected++;
+                            if (d.FirstPeerMs < 0) d.FirstPeerMs = Now() - e.OpenedMs;
+                        }
                     };
                     // Сколько дал пир — для списка сохранённых (и у отключённых за сессию)
                     m.PeerDisconnected += (s, a) => savedPeers.Seen(e.Hash, a.Peer);
@@ -747,6 +854,8 @@ namespace TorrStreamTorrServer
                     lock (e.Diag) { e.Diag.Saved = fed; e.Diag.SavedConnected = 0; }
                     log(e.Hash + ": сохранённых пиров " + fed + " — подключаюсь сразу");
                 }
+                // Метаданные из кэша MonoTorrent или из .torrent — старт без их ожидания
+                if (m.HasMetadata) lock (e.Diag) if (e.Diag.MetaMs < 0) e.Diag.MetaMs = 0;
                 log(e.Hash + ": открыт" + (m.HasMetadata ? "" : ", жду метаданные"));
                 _ = WatchInfoAsync(e, m);
             }
@@ -786,7 +895,15 @@ namespace TorrStreamTorrServer
                 save = e.InDb;
             }
             AddWebSeeds(e, m);
-            log(e.Hash + ": метаданные за " + ((Now() - e.OpenedMs) / 1000) + " с");
+            long metaMs = Now() - e.OpenedMs;
+            bool waited;
+            lock (e.Diag)
+            {
+                waited = e.Diag.MetaMs < 0;
+                if (waited) e.Diag.MetaMs = metaMs;
+            }
+            if (waited) Load.Add("metadata", metaMs);
+            log(e.Hash + ": метаданные за " + (waited ? Sec(metaMs) : "0 с (кэш)"));
             log(e.Hash + ": " + e.Name + " — " + files.Count + " файл(ов), " + (t.Size >> 20) + " МБ, кусок " + (t.PieceLength >> 10) + " КБ");
             if (save) SaveDb();
         }
@@ -1320,6 +1437,8 @@ namespace TorrStreamTorrServer
                 if (r != null) log(kv.Key.Hash + ": " + r);
                 if (kv.Key.Manager.State != TorrentState.Downloading) continue;
                 try { kv.Key.Pool.Tick(kv.Key.Manager); } catch (Exception ex) { log(kv.Key.Hash + ": запас пиров — " + ex.Message); }
+                if (kv.Value)
+                    try { Boost(kv.Key, kv.Key.Manager, now); } catch (Exception ex) { log(kv.Key.Hash + ": повторный анонс — " + ex.Message); }
             }
             foreach (var kv in snapshot) _ = SnapshotPeersAsync(kv.Key, kv.Value, false);
             foreach (var kv in idle)
@@ -1333,6 +1452,46 @@ namespace TorrStreamTorrServer
             }
             if (Due(ref trimAtMs, now) | Due(ref lateTrimAtMs, now))
                 Task.Run(() => { try { TrimMemory(); } catch (Exception ex) { log("сборка мусора: " + ex.Message); } });
+        }
+
+        /// <summary>
+        /// Пиров мало, а качать есть что: подключено меньше половины ConnectionsLimit,
+        /// очередь MonoTorrent и запас службы (PeerPool) пусты, никто не подключается.
+        /// Тогда — не дожидаясь интервала трекера (часто 30 минут) и DHT (3 минуты):
+        /// get_peers в DHT и анонс трекерам, которые отвечали и чей min interval прошёл.
+        /// Их ответы MonoTorrent и PeerPool разбирают как обычно
+        /// </summary>
+        void Boost(TorrEntry e, TorrentManager m, long now)
+        {
+            if (m.Torrent == null || m.Torrent.IsPrivate || now - e.OpenedMs < BoostAfterOpenMs) return;
+            if (m.OpenConnections >= Math.Max(4, Settings.ConnectionsLimit / 2) || m.Peers.Available > 0 || e.Pool.Extra > 0 || Connecting(m) > 0) return;
+            var d = e.Diag;
+            lock (d)
+            {
+                if (d.LastBoostMs >= 0 && now - d.LastBoostMs < BoostEveryMs) return;
+                d.LastBoostMs = now;
+                d.Boosts++;
+            }
+            Interlocked.Increment(ref boostsTotal);
+            bool dht = false;
+            var dhtEngine = dhtBoot?.Engine;
+            if (Settings.EnableDHT && dhtEngine != null && dhtEngine.State == MonoTorrent.Dht.DhtState.Ready)
+            {
+                dhtEngine.GetPeers(m.InfoHashes.V1OrV2);
+                dht = true;
+            }
+            int asked = 0;
+            foreach (var tier in m.TrackerManager.Tiers.ToList())
+            {
+                var t = tier.ActiveTracker;
+                if (t == null || !tier.LastAnnounceSucceeded) continue;
+                if (tier.TimeSinceLastAnnounce.TotalMilliseconds < Math.Max(BoostTrackerMs, t.MinUpdateInterval.TotalMilliseconds)) continue;
+                asked++;
+                // Анонс одному трекеру — без проверки интервала уровня (её мы сделали выше)
+                _ = Task.Run(async () => { try { await m.TrackerManager.AnnounceAsync(t, CancellationToken.None); } catch { } });
+            }
+            log(e.Hash + ": мало пиров (подключено " + m.OpenConnections + ") — ещё раз спрашиваю " +
+                (dht ? "DHT" : "") + (dht && asked > 0 ? " и " : "") + (asked > 0 ? "трекеры (" + asked + ")" : "") + (!dht && asked == 0 ? "некого: трекеры отвечали недавно" : ""));
         }
 
         /// <summary>Срок at наступил — снять его (один раз, даже если CloseIdle вызван дважды)</summary>
@@ -1375,6 +1534,8 @@ namespace TorrStreamTorrServer
                 if (e.Pool.V6Known > 0 || d.V6Connected > 0) sb.Append(" · IPv6: адресов ").Append(e.Pool.V6Known).Append(", подключались ").Append(d.V6Connected);
                 if (d.Fails.Count > 0)
                     sb.Append(" · не подключились: ").Append(string.Join(", ", d.Fails.Select(kv => kv.Key + " " + kv.Value)));
+                if (d.PlainRetried.Count > 0)
+                    sb.Append(" · без шифрования повторно ").Append(d.PlainRetried.Count).Append(", подключились ").Append(d.PlainRetryConnected);
                 if (d.Trackers.Count > 0)
                     sb.Append(" · трекеры: ").Append(string.Join("; ", d.Trackers.Select(kv => kv.Key + " " + kv.Value)));
                 else
@@ -1431,9 +1592,18 @@ namespace TorrStreamTorrServer
             }
         }
 
-        public TorrReader OpenReader(TorrEntry e, FileStat f, long position, long limit = -1)
+        /// <summary>measure — первый такой читатель задаёт замер старта (у предзагрузки — читатель начала, не конца)</summary>
+        public TorrReader OpenReader(TorrEntry e, FileStat f, long position, long limit = -1, bool measure = true)
         {
-            var r = new TorrReader { Entry = e, Stat = f, Position = position, Limit = limit, Seq = Interlocked.Increment(ref readerSeq) };
+            var r = new TorrReader { Entry = e, Stat = f, Position = position, Limit = limit, Seq = Interlocked.Increment(ref readerSeq), OpenedMs = Now() };
+            if (measure && f.File != null)
+                lock (e.Diag)
+                    if (e.Diag.FirstReadMs < 0)
+                    {
+                        e.Diag.FirstReadMs = r.OpenedMs - e.OpenedMs;
+                        e.Diag.BufferFrom = f.File.OffsetInTorrent + position;
+                        e.Diag.BufferNeed = Math.Min(BufferBytes, Math.Max(0, f.Length - position));
+                    }
             lock (sync)
             {
                 e.Readers.Add(r);
@@ -1573,11 +1743,79 @@ namespace TorrStreamTorrServer
                         r.Position += got;
                         if ((int)((tOff + got) / pl) != before)
                             lock (sync) UpdateProtect(e);
+                        if (!r.GotByte) FirstByte(r);
+                        if (e.Diag.BufferMs < 0) CheckBuffer(e, store, responsive);
                         return got;
                     }
                 }
+                r.Waited = true;
                 if (aborted()) return -1;
             }
+        }
+
+        static string Sec(long ms) { return (ms / 1000.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture).Replace('.', ',') + " с"; }
+
+        // Читатель отдал первый байт: первый за открытие — в замер старта, иначе
+        // (ждал данных — перемотка или новый участок) — в замер ожидания
+        void FirstByte(TorrReader r)
+        {
+            r.GotByte = true;
+            var e = r.Entry;
+            var d = e.Diag;
+            long now = Now();
+            bool first;
+            long fromOpen;
+            lock (d)
+            {
+                first = d.FirstByteMs < 0;
+                if (first) d.FirstByteMs = now - e.OpenedMs;
+                fromOpen = d.FirstByteMs;
+            }
+            if (first)
+            {
+                Load.Add("first_byte", fromOpen);
+                return;
+            }
+            if (!r.Waited) return;
+            long wait = now - r.OpenedMs;
+            Load.Add("wait", wait);
+            if (wait >= SlowWaitMs)
+                log(e.Hash + ": данные через " + Sec(wait) + " — файл " + r.Stat.Id + ", с " + ((r.Stat.File.OffsetInTorrent + r.Position) >> 20) + " МБ торрента");
+        }
+
+        // От места первого запроса скачано подряд BufferBytes (или до конца файла) —
+        // старт готов. Плеер читает со скоростью видео, быстрый клиент — сразу всё,
+        // поэтому считаем от места запроса, а не впереди позиции. Не чаще раза в 200 мс
+        void CheckBuffer(TorrEntry e, PieceStore store, bool responsive)
+        {
+            var d = e.Diag;
+            long now = Now();
+            long from, need;
+            lock (d)
+            {
+                if (d.BufferMs >= 0 || d.BufferFrom < 0 || now < d.NextBufferCheckMs) return;
+                d.NextBufferCheckMs = now + 200;
+                from = d.BufferFrom;
+                need = d.BufferNeed;
+            }
+            if (need > 0 && (responsive ? store.AvailableRun(from, need) : store.VerifiedRun(from, need)) < need) return;
+            string line;
+            lock (d)
+            {
+                if (d.BufferMs >= 0) return;
+                d.BufferMs = now - e.OpenedMs;
+                if (d.StartLogged) return;
+                d.StartLogged = true;
+                line = e.Hash + ": старт — первый пир " + (d.FirstPeerMs >= 0 ? Sec(d.FirstPeerMs) : "—")
+                    + " · метаданные " + (d.MetaMs > 0 ? Sec(d.MetaMs) : "из кэша")
+                    + " · запрос данных " + Sec(Math.Max(0, d.FirstReadMs))
+                    + " · первый байт " + Sec(Math.Max(0, d.FirstByteMs))
+                    + " · " + (BufferBytes >> 20) + " МБ подряд " + Sec(d.BufferMs);
+            }
+            Load.Add("buffer", d.BufferMs);
+            // От запроса данных: у предзагруженного торрента открытие было давно
+            if (d.FirstReadMs >= 0) Load.Add("buffer_after_read", d.BufferMs - d.FirstReadMs);
+            log(line);
         }
 
         /// <summary>
@@ -1605,7 +1843,7 @@ namespace TorrStreamTorrServer
 
             // Конец — открываем первым: главный читатель (окно вперёд) — последний
             // открытый, им должно быть начало; конец идёт как второй читатель
-            TorrReader rt = withTail ? OpenReader(e, f, tailStart) : null;
+            TorrReader rt = withTail ? OpenReader(e, f, tailStart, measure: false) : null;
             // Окно начала — только до своего участка: иначе оно качало обычные
             // 60 МБ вперёд, забивало кэш и канал, пока конец файла ждал
             var rh = OpenReader(e, f, 0, headEnd);
@@ -1857,7 +2095,18 @@ namespace TorrStreamTorrServer
                 w.EndObj().Key("Trackers").Obj();
                 foreach (var kv in d.Trackers) w.Prop(kv.Key, kv.Value);
                 w.EndObj();
+                // Старт этого открытия, мс от открытия (−1 — ещё не было)
+                w.Key("Start").Obj().Prop("FirstPeer", d.FirstPeerMs).Prop("Metadata", d.MetaMs)
+                    .Prop("FirstRead", d.FirstReadMs).Prop("FirstByte", d.FirstByteMs).Prop("Buffer", d.BufferMs)
+                    .Prop("BufferBytes", BufferBytes).EndObj();
+                w.Prop("Boosts", d.Boosts);
+                w.Prop("PlainRetries", d.PlainRetried.Count).Prop("PlainRetryConnected", d.PlainRetryConnected);
             }
+            var rq = e.Requester;
+            if (rq != null) w.Prop("Snubs", rq.Snubs).Prop("SnubCancelled", rq.SnubCancelled).Prop("SnubbedNow", rq.SnubbedNow);
+            // Отказы в вытесненных кусках — на весь процесс
+            w.Key("Guard").Obj().Prop("Supported", RequestGuard.Supported).Prop("Rejected", RequestGuard.Rejected)
+                .Prop("Silent", RequestGuard.Silent).Prop("Late", RequestGuard.Late).EndObj();
             // ut_holepunch — счётчики на весь процесс
             w.Key("HolePunch").Obj().Prop("Supported", HolePunch.Supported)
                 .Prop("RendezvousSent", HolePunch.RendezvousSent).Prop("ConnectReceived", HolePunch.ConnectReceived)
@@ -2041,6 +2290,14 @@ namespace TorrStreamTorrServer
                 .Prop("dht", engine != null ? engine.Dht.State + ", узлов " + engine.Dht.NodeCount : "")
                 .Prop("trackers", trackers != null ? trackers.Current.Length + " (" + trackers.Source + (trackers.UpdatedAt.HasValue ? ", " + trackers.UpdatedAt.Value.ToString("dd.MM HH:mm") : "") + ")" : "")
                 .Prop("uptime_s", (long)(DateTime.UtcNow - StartedAt).TotalSeconds);
+            // Загрузка с запуска службы: старты и ожидания данных (мс, последние 100),
+            // отказы в вытесненных кусках, пиры «не шлёт», повторные анонсы
+            w.Key("load").Obj().Key("ms");
+            Load.Write(w);
+            w.Prop("guard", RequestGuard.Supported).Prop("rejected", RequestGuard.Rejected)
+                .Prop("silent", RequestGuard.Silent).Prop("late", RequestGuard.Late)
+                .Prop("snubs", WindowRequester.TotalSnubs).Prop("snub_cancelled", WindowRequester.TotalSnubCancelled)
+                .Prop("boosts", Volatile.Read(ref boostsTotal)).Prop("plain_retried", PlainTextRetry.Retried).EndObj();
             if (StartError != null) w.Prop("error", StartError);
             if (problem != null) w.Prop("problem", problem);
             w.EndObj();

@@ -198,7 +198,9 @@ namespace TorrStreamTorrServer
             if (access != null)
             {
                 a.RequireAuth = access.Bool("require_auth") ?? false;
-                a.LanWithoutAuth = access.Bool("lan_without_auth") ?? true;
+                // Запись до 1.0.32 (без версии) — галочку включить один раз (Accounts.AccessVersion)
+                if ((access.Num("version") ?? 0) >= Accounts.AccessVersion) a.LanWithoutAuth = access.Bool("lan_without_auth") ?? true;
+                else { a.LanWithoutAuth = true; a.AccessUpgraded = !(access.Bool("lan_without_auth") ?? true); }
             }
             var master = Obj(root, "master");
             if (master != null)
@@ -264,7 +266,7 @@ namespace TorrStreamTorrServer
             }
             w.EndObj();
             a.NodeSeenDirty.Clear();
-            w.Key("access").Obj().Prop("require_auth", a.RequireAuth).Prop("lan_without_auth", a.LanWithoutAuth).EndObj();
+            w.Key("access").Obj().Prop("version", Accounts.AccessVersion).Prop("require_auth", a.RequireAuth).Prop("lan_without_auth", a.LanWithoutAuth).EndObj();
             w.Key("master").Obj().Prop("enabled", a.MasterEnabled).Prop("local_max", a.LocalMax).Key("nodes").Arr();
             foreach (var n in a.Nodes)
                 w.Obj().Prop("id", n.Id).Prop("name", n.Name).Prop("url", n.Url).Prop("key", n.Key).Prop("max", n.Max).Prop("enabled", n.Enabled).EndObj();

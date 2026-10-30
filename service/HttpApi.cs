@@ -225,6 +225,9 @@ namespace TorrStreamTorrServer
                 (path.StartsWith("/api/") && req.Method == "GET") ||
                 (path == "/torrents" && (req.BodyText.Contains("\"list\"") || req.BodyText.Contains("\"get\"")));
             if (file || (polling && ms < 1000)) return;
+            // Адрес клиента: за nginx на этой машине — из X-Forwarded-For (Identify), а не 127.0.0.1
+            string who = req.Caller?.Ip ?? Remote(client);
+            if (!KnownRoute(path)) { LogScan(who, req.Method + " " + path); return; }
             string what = req.Method + " " + path;
             if (req.Query.Count > 0) what += "?" + string.Join("&", req.Query.Select(kv => kv.Key == "link" && kv.Value.Length > 48 ? kv.Key + "=" + kv.Value.Substring(0, 48) + "…" : (kv.Value.Length > 0 ? kv.Key + "=" + kv.Value : kv.Key)));
             if (req.Body.Length > 0 && path != "/settings")
@@ -233,7 +236,55 @@ namespace TorrStreamTorrServer
                 int at = body.IndexOf("\"action\"", StringComparison.Ordinal);
                 if (at >= 0) what += " " + body.Substring(at, Math.Min(24, body.Length - at));
             }
-            log("HTTP " + what + " — " + (ms / 1000.0).ToString("0.0") + " с, " + Remote(client) + (req.Caller != null && req.Caller.User != null ? " (" + req.Caller.Who + ")" : ""));
+            log("HTTP " + what + " — " + (ms / 1000.0).ToString("0.0") + " с, " + who + (req.Caller != null && req.Caller.User != null ? " (" + req.Caller.Who + ")" : ""));
+        }
+
+        // Адреса, которые служба обслуживает (Handle); остальное — 404
+        static bool KnownRoute(string path)
+        {
+            switch (path)
+            {
+                case "": case "/echo": case "/favicon.ico": case "/version": case "/index.html": case "/login": case "/log":
+                case "/torrents": case "/stream": case "/cache": case "/settings": case "/viewed": case "/shutdown":
+                    return true;
+            }
+            return path.StartsWith("/stream/") || path.StartsWith("/play/") || path.StartsWith("/download/") || path.StartsWith("/api/");
+        }
+
+        // Сканеры (/.env, /phpinfo.php, /wp-config.php…): служба им отвечает 404, но по
+        // строке на запрос они забивали журнал. Первый такой запрос с адреса — строкой,
+        // дальше с него — сводкой раз в ScanEveryMs (сколько и какие адреса)
+        const long ScanEveryMs = 10 * 60 * 1000;
+        sealed class ScanStat { public long FromMs; public int Count; public readonly List<string> Paths = new List<string>(); }
+        readonly Dictionary<string, ScanStat> scans = new Dictionary<string, ScanStat>();
+        readonly System.Diagnostics.Stopwatch scanClock = System.Diagnostics.Stopwatch.StartNew();
+
+        void LogScan(string who, string what)
+        {
+            string line = null;
+            long now = scanClock.ElapsedMilliseconds;
+            lock (scans)
+            {
+                if (scans.Count > 1000) scans.Clear();
+                if (!scans.TryGetValue(who, out var st))
+                {
+                    scans[who] = new ScanStat { FromMs = now };
+                    line = "HTTP " + what + " — нет такого адреса (404), " + who + "; дальше такие с этого адреса — сводкой раз в 10 минут";
+                }
+                else
+                {
+                    st.Count++;
+                    if (st.Paths.Count < 5) st.Paths.Add(what.Substring(what.IndexOf(' ') + 1));
+                    if (now - st.FromMs >= ScanEveryMs)
+                    {
+                        line = "HTTP: с " + who + " ещё " + st.Count + " запросов несуществующих адресов за " + ((now - st.FromMs) / 60000) + " мин (" + string.Join(", ", st.Paths) + (st.Count > st.Paths.Count ? ", …" : "") + ") — похоже на сканер, всем 404";
+                        st.FromMs = now;
+                        st.Count = 0;
+                        st.Paths.Clear();
+                    }
+                }
+            }
+            if (line != null) log(line);
         }
 
         static Request ReadRequest(Input input)

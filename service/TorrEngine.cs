@@ -180,7 +180,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.33";
+        public const string ServiceVersion = "1.0.34";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 
@@ -1829,7 +1829,12 @@ namespace TorrStreamTorrServer
         public bool Preload(TorrEntry e, FileStat f, Func<bool> aborted)
         {
             long size = Math.Min(f.Length, Settings.CacheSize * Settings.PreloadCache / 100);
-            if (size <= 0) return true;
+            if (size <= 0)
+            {
+                // Предзагрузка выключена — без размера от прошлой, иначе Lampa ждёт его
+                lock (sync) { e.PreloadSize = 0; e.PreloadedBytes = 0; }
+                return true;
+            }
             int pl;
             lock (sync) pl = PieceLengthOf(e);
             long tail = Math.Max(pl, 8L << 20);
@@ -1982,9 +1987,14 @@ namespace TorrStreamTorrServer
                 size = e.PreloadSize;
                 return;
             }
-            // Скачанное, а не выделенное: начатый кусок по 8 МБ — не 8 МБ кэша
-            buffered = e.Store.Downloaded;
-            size = e.PreloadSize > 0 ? e.PreloadSize : e.Store.Capacity;
+            // Скачанное, а не выделенное: начатый кусок по 8 МБ — не 8 МБ кэша. С
+            // закреплёнными концами файла: предзагрузка их считала, и без них
+            // Lampa после неё видела 17 из 33 МБ (52 % < 95 %), 30 с ждала и
+            // закрывала загрузку без запуска плеера.
+            buffered = e.Store.Downloaded + e.Store.PinnedBytes;
+            // Предзагрузки не было — 0, как у TorrServer: Lampa тогда запускает сразу
+            // (pb / 0), а не ждёт, пока без читателя наполнится весь кэш
+            size = e.PreloadSize;
         }
 
         // TorrServer кладёт список файлов и в «data» — фронтенд читает и оттуда

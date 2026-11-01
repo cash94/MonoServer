@@ -673,6 +673,17 @@ namespace TorrStreamTorrServer
             return SendJson(s, req, engine.Settings.ToJson());
         }
 
+        // Случайные байты, как у TorrServer (rand.Read): нули сжимает VPN или прокси
+        // по пути, и тест скорости в Lampa показывал больше, чем есть
+        static readonly byte[] Noise = MakeNoise();
+
+        static byte[] MakeNoise()
+        {
+            var b = new byte[1 << 20];   // 1 МБ, как у TorrServer
+            new Random().NextBytes(b);
+            return b;
+        }
+
         bool Download(Stream s, Request req, Caller c, string path)
         {
             if (!int.TryParse(path.Substring("/download/".Length), out int mb) || mb <= 0) mb = 1;
@@ -680,14 +691,13 @@ namespace TorrStreamTorrServer
             long total = (long)mb << 20;
             WriteHead(s, req, 200, "application/octet-stream", total, null, req.KeepAlive);
             if (req.Method == "HEAD") return true;
-            var zero = new byte[ChunkSize];
             long sent = 0;
             try
             {
                 for (long left = total; left > 0; left -= ChunkSize)
                 {
                     int n = (int)Math.Min(ChunkSize, left);
-                    s.Write(zero, 0, n);
+                    s.Write(Noise, (int)(sent % Noise.Length), n);
                     sent += n;
                 }
             }

@@ -942,6 +942,9 @@ namespace TorrStreamTorrServer
             WriteHead(s, req, partial ? 206 : 200, MimeOf(f.Path), length, extra, req.KeepAlive);
             if (req.Method == "HEAD" || length <= 0) return true;
 
+            // Samsung и XviD/DivX в AVI: до главного читателя — им должен быть последний открытый
+            long[] avi = start < AviFix.HeadSize && AviFix.IsAvi(f.Path) && AviFix.ForClient(req.Header("User-Agent"))
+                ? AviPatches(client, e, f) : null;
             var reader = engine.OpenReader(e, f, start);
             // Кто смотрит — для «Потоков», счёта зрителей (балансировка) и трафика
             var info = Streams.Begin(new StreamInfo
@@ -962,6 +965,7 @@ namespace TorrStreamTorrServer
                 {
                     int n = engine.Read(reader, buf, 0, (int)Math.Min(buf.Length, left), () => Gone(client));
                     if (n <= 0) return false;   // прервано — соединение не продолжаем
+                    if (avi != null && start + sent < AviFix.HeadSize) AviFix.Patch(buf, n, start + sent, avi);
                     s.Write(buf, 0, n);
                     left -= n;
                     sent += n;
@@ -979,6 +983,38 @@ namespace TorrStreamTorrServer
                 accounts.AddHttp(c.Login, c.Remote, sent - counted);
                 log(e.Hash + ": файл " + f.Id + " — " + how + ": отдано " + Mb(sent) + " за " + (started.ElapsedMilliseconds / 1000.0).ToString("0.0") + " с, позиция " + Mb(start + sent));
             }
+        }
+
+        // Хэш:номер файла → смещения FourCC для подмены (AviFix); разбор — раз на файл
+        readonly Dictionary<string, long[]> aviPatches = new Dictionary<string, long[]>();
+
+        long[] AviPatches(TcpClient client, TorrEntry e, FileStat f)
+        {
+            string key = e.Hash + ":" + f.Id;
+            lock (aviPatches)
+                if (aviPatches.TryGetValue(key, out var known)) return known;
+            int want = (int)Math.Min(AviFix.HeadSize, f.Length), got = 0;
+            var head = new byte[want];
+            var r = engine.OpenReader(e, f, 0, want, measure: false);
+            try
+            {
+                while (got < want)
+                {
+                    int n = engine.Read(r, head, got, want - got, () => Gone(client));
+                    if (n <= 0) break;
+                    got += n;
+                }
+            }
+            finally { engine.CloseReader(r); }
+            var at = AviFix.Find(head, got);
+            if (got < want) return at;   // не дочитали — разберём ещё раз в следующем запросе
+            lock (aviPatches)
+            {
+                if (aviPatches.Count > 256) aviPatches.Clear();
+                aviPatches[key] = at;
+            }
+            if (at.Length > 0) log(e.Hash + ": файл " + f.Id + " — AVI с XviD/DivX: FourCC для Samsung подменён на MP4V");
+            return at;
         }
 
         static string Mb(long bytes) { return (bytes / 1048576.0).ToString("0.0") + " МБ"; }

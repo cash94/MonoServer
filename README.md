@@ -408,6 +408,11 @@ Termux (`service/mono/OpenSslHttpHandler.cs`, `Http.cs`), с корневыми
   Вкладки не уезжают за край: в узкой шапке подписи короче, в совсем узкой — одни значки.
   Открывается с телефона или ПК: `http://<IP телевизора>:8090/`. Без входа
   `/version` отвечает коротко (имя, версия — для страницы Tizen), `/log` — 401.
+- `AviFix.cs` — AVI с XviD/DivX для Samsung, как «samsung tv fix» у TorrServer:
+  плееру телевизора (User-Agent с Tizen, SMART-TV, Samsung, SEC_HHP, Maple) FourCC
+  видеопотока XVID/DIVX/DX50 в заголовке отдаётся как MP4V. Места — по разбору
+  hdrl (strh и strf каждого видеопотока), а не постоянные смещения 112 и 188, и в
+  любом запросе Range; остальным клиентам файл отдаётся как есть.
 - `Program.cs` — обвязка Tizen, `Host.cs` — служба целиком (её же запускает `pc/`).
 
 `app/` — страница пакета: запуск службы, состояние и адрес — IP телевизора
@@ -425,7 +430,7 @@ Termux (`service/mono/OpenSslHttpHandler.cs`, `Http.cs`), с корневыми
 ## Сборка
 
 ```
-python tools/build.py [--version 1.0.34] [--linux]
+python tools/build.py [--version 1.0.35] [--linux]
 ```
 
 Нужен .NET SDK 8+ (Tizen.NET.Sdk и MonoTorrent скачаются сами). Результат — в

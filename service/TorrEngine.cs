@@ -180,7 +180,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.32";
+        public const string ServiceVersion = "1.0.33";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 
@@ -1955,9 +1955,16 @@ namespace TorrStreamTorrServer
                         .Prop("bytes_written", m.Monitor.DataBytesSent).Prop("bytes_read", m.Monitor.DataBytesReceived)
                         .Prop("bytes_read_data", m.Monitor.DataBytesReceived).Prop("bytes_read_useful_data", m.Monitor.DataBytesReceived);
                 }
-                w.Key("file_stats").Arr();
-                foreach (var f in e.Files) w.Obj().Prop("id", f.Id).Prop("path", f.Path).Prop("length", f.Length).EndObj();
-                w.EndArr().EndObj();
+                // Пока нет метаданных — без file_stats, как omitempty у TorrServer:
+                // Lampa ждёт файлы, пока поля нет, а пустой [] (в JS это true)
+                // сразу показывает «Пусто — не удалось извлечь подходящие файлы»
+                if (e.Files.Count > 0)
+                {
+                    w.Key("file_stats").Arr();
+                    foreach (var f in e.Files) w.Obj().Prop("id", f.Id).Prop("path", f.Path).Prop("length", f.Length).EndObj();
+                    w.EndArr();
+                }
+                w.EndObj();
             }
         }
 

@@ -130,6 +130,14 @@ def build_linux(version, out, work):
             info.mode = 0o755
             with open(os.path.join(pub, 'MonoServer'), 'rb') as f:
                 tar.addfile(info, f)
+            # GC на сегментах (service/pc/GcSwitch.cs) — рядом с программой; она умеет
+            # положить его и сама, но в /opt под --system ей писать некуда
+            gc = os.path.join(pub, 'libclrgc.so')
+            if os.path.exists(gc):
+                gi = tar.gettarinfo(gc, arcname='libclrgc.so')
+                gi.mode = 0o644
+                with open(gc, 'rb') as f:
+                    tar.addfile(gi, f)
             # Скрипт запуска и службы systemd — рядом с программой
             script = os.path.join(ROOT, 'linux', 'monoserver.sh')
             si = tar.gettarinfo(script, arcname='monoserver.sh')

@@ -180,7 +180,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.35";
+        public const string ServiceVersion = "1.0.36";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 
@@ -1086,28 +1086,39 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>Удалить торрент совсем — и из базы, и метаданные</summary>
-        public async Task RemoveAsync(string hash)
+        public Task RemoveAsync(string hash)
         {
-            var e = Get(hash);
-            if (e == null) return;
-            await CloseAsync(e, -1).ConfigureAwait(false);
-            lock (sync) entries.Remove(e.Hash);
-            if (e.InDb) SaveDb();
-            savedPeers.Forget(e.Hash);
+            return RemoveManyAsync(new[] { hash });
+        }
+
+        /// <summary>
+        /// Удалить торренты пачкой: закрываются все сразу (у каждого до 2 с ждём
+        /// трекеры — по одному 50 торрентов шли бы минуты), база пишется один раз
+        /// </summary>
+        public async Task RemoveManyAsync(IEnumerable<string> hashes)
+        {
+            var list = hashes.Select(Get).Where(x => x != null).GroupBy(x => x.Hash).Select(g => g.First()).ToList();
+            if (list.Count == 0) return;
+            await Task.WhenAll(list.Select(e => CloseAsync(e, -1))).ConfigureAwait(false);
+            bool inDb = false;
+            lock (sync)
+                foreach (var e in list) { entries.Remove(e.Hash); inDb |= e.InDb; }
+            if (inDb) SaveDb();
+            foreach (var e in list) savedPeers.Forget(e.Hash);
             savedPeers.Save();
             try
             {
                 var meta = Path.Combine(cacheDir, "metadata");
                 if (Directory.Exists(meta))
                     foreach (var f in Directory.GetFiles(meta))
-                        if (Path.GetFileName(f).IndexOf(e.Hash, StringComparison.OrdinalIgnoreCase) >= 0) File.Delete(f);
+                        if (list.Any(e => Path.GetFileName(f).IndexOf(e.Hash, StringComparison.OrdinalIgnoreCase) >= 0)) File.Delete(f);
             }
             catch { }
         }
 
-        public async Task WipeAsync()
+        public Task WipeAsync()
         {
-            foreach (var e in List()) await RemoveAsync(e.Hash).ConfigureAwait(false);
+            return RemoveManyAsync(List().Select(e => e.Hash));
         }
 
         // ==================== для пользователей (Accounts.cs) ====================
@@ -1291,6 +1302,12 @@ namespace TorrStreamTorrServer
                 e.Protect = new int[0];
                 e.Window = ReadWindow.None;
                 e.Preloading = false;
+                // WindowRequester держит закрытый TorrentManager (через свой выборщик
+                // кусков) и словарь его пиров — соединения, битфилды, uTP: так от
+                // каждого просмотренного торрента оставалось 2–5 МБ до его удаления.
+                // Сохранённые пиры (SavedPeers) — отдельно, адресами: им это не нужно
+                e.Requester = null;
+                e.PinnedFile = null;
             }
             foreach (var r in readers) r.Closed = true;
             if (store != null) store.Dispose();
@@ -1335,8 +1352,18 @@ namespace TorrStreamTorrServer
         {
             long before = ProcessRssMb();
             ForgetClosed(null);
+            // Открытых нет — пулы буферов до минимума: их набирают на пике (сотни пиров)
+            // и не отдают никогда (BufferPools.cs)
+            string pools = "";
+            bool anyOpen;
+            lock (sync) anyOpen = entries.Values.Any(x => x.Manager != null);
+            if (!anyOpen)
+            {
+                long freed = BufferPools.Trim() + Utp.UtpMemoryPool.Default.Trim();
+                if (freed > 0) pools = ", пулы буферов −" + (freed >> 20) + " МБ";
+            }
             CollectGarbage();
-            log("память после закрытия торрента: процесс " + before + " → " + ProcessRssMb() + " МБ, куча .NET " + (GC.GetTotalMemory(false) >> 20) + " МБ");
+            log("память после закрытия торрента: процесс " + before + " → " + ProcessRssMb() + " МБ, куча .NET " + (GC.GetTotalMemory(false) >> 20) + " МБ" + pools);
         }
 
         // DiskManager.IncrementalHashes (внутреннее) — пошаговое хэширование кусков по

@@ -36,13 +36,16 @@ namespace TorrStreamTorrServer
                 Journal.Add(m);
                 if (sink != null) sink(m);
             };
-            log("MonoServer " + TorrEngine.ServiceVersion + ", " + System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
+            // GC на сегментах — pc/GcSwitch.cs (Linux): видно, включился ли
+            string gc = Environment.GetEnvironmentVariable("DOTNET_GCName");
+            log("MonoServer " + TorrEngine.ServiceVersion + ", " + System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription +
+                (string.IsNullOrEmpty(gc) ? "" : ", GC на сегментах (" + gc + ")"));
             Directory.CreateDirectory(dataDir);
             Engine = new TorrEngine(dataDir, log);
             Accounts = new Accounts(dataDir, log);
             // HTTP — первым: занят порт — движок и не нужен, и базу второй экземпляр не трогает
             string localKey = Accounts.RandomHex(16);
-            Api = new HttpApi(Engine, Accounts, port, log, Journal, localKey) { LocalSetupCode = LocalSetupCode };
+            Api = new HttpApi(Engine, Accounts, port, log, Journal, localKey, dataDir) { LocalSetupCode = LocalSetupCode };
             Api.Start();
             WriteLocalKey(dataDir, localKey, log);
             // Движок — до базы пользователей, как до 1.0.26: торренты и потоки

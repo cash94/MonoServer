@@ -12,6 +12,31 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 
+  <!--
+    GC на сегментах (GcSwitch.cs): libclrgc.so из пакета рантайма — ресурсом в
+    программу (она сама кладёт его рядом с собой) и файлом рядом в публикации (архив,
+    monoserver.sh install). Только Linux: на Windows не проверено, а не загрузившийся
+    GC — служба не стартует
+  -->
+  <Target Name="ClrGc" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveFrameworkReferences" Condition="$(RuntimeIdentifier.StartsWith('linux'))">
+    <PropertyGroup>
+      <_ClrGcName>libclrgc.so</_ClrGcName>
+    </PropertyGroup>
+    <ItemGroup>
+      <_ClrGc Include="@(ResolvedRuntimePack->'%(PackageDirectory)/runtimes/$(RuntimeIdentifier)/native/$(_ClrGcName)')" />
+      <EmbeddedResource Include="@(_ClrGc)" LogicalName="clrgc" Condition="Exists('%(Identity)')" />
+    </ItemGroup>
+  </Target>
+  <Target Name="ClrGcBesideExe" AfterTargets="ComputeResolvedFilesToPublishList" Condition="$(RuntimeIdentifier.StartsWith('linux'))">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(_ClrGc)" Condition="Exists('%(Identity)')">
+        <RelativePath>$(_ClrGcName)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <Compile Include="*.cs" />
     <Compile Include="../*.cs" Exclude="../Program.cs" />

@@ -42,7 +42,7 @@ namespace TorrStreamTorrServer
 
         LiteDatabase Open()
         {
-            try { return new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct }); }
+            try { return Small(new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct })); }
             catch (IOException e)
             {
                 // Занята (другой экземпляр службы) или нет доступа — не трогаем
@@ -65,7 +65,19 @@ namespace TorrStreamTorrServer
             string journal = Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path) + "-log.db");
             if (File.Exists(journal)) File.Move(journal, bad + "-log");
             log(Name + " отложена в " + Path.GetFileName(bad) + ", начинаю новую");
-            return new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct });
+            return Small(new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct }));
+        }
+
+        // Журнал (monoserver-log.db) переносится в базу каждые 50 страниц, а не 1000:
+        // до переноса его страницы лежат в кэше LiteDB, а кэш, раз выросши, памяти не
+        // отдаёт. Трафик пишется каждые 10 с — база в 150 КБ держала 12–14 МБ кэша
+        const int CheckpointPages = 50;
+
+        LiteDatabase Small(LiteDatabase d)
+        {
+            try { d.CheckpointSize = CheckpointPages; }
+            catch (Exception e) { log(Name + ": CheckpointSize — " + e.Message); }
+            return d;
         }
 
         static string S(BsonDocument d, string k) { var v = d[k]; return v != null && v.IsString ? v.AsString : ""; }

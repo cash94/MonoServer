@@ -41,6 +41,8 @@ namespace TorrStreamTorrServer
         readonly LogRing journal;
         readonly string localKey;
         public readonly StreamRegistry Streams = new StreamRegistry();
+        /// <summary>Заблокированные адреса и недавние клиенты (IpBlocklist.cs)</summary>
+        public readonly IpBlocklist Blocklist;
         /// <summary>Отдавать код первого входа странице приложения на этом устройстве (Tizen)</summary>
         public bool LocalSetupCode;
 
@@ -56,7 +58,7 @@ namespace TorrStreamTorrServer
         int connections;
 
         /// <summary>localKey — ключ приложения на том же устройстве (local.key в данных службы): с ним — как admin</summary>
-        public HttpApi(TorrEngine engine, Accounts accounts, int port, Action<string> log, LogRing journal, string localKey)
+        public HttpApi(TorrEngine engine, Accounts accounts, int port, Action<string> log, LogRing journal, string localKey, string dataDir = null)
         {
             this.engine = engine;
             this.accounts = accounts;
@@ -65,6 +67,7 @@ namespace TorrStreamTorrServer
             this.journal = journal;
             this.localKey = localKey;
             Balancer = new Balancer(accounts, Streams, this.log);
+            Blocklist = new IpBlocklist(dataDir, this.log);
         }
 
         public int Port => port;
@@ -90,6 +93,12 @@ namespace TorrStreamTorrServer
                 TcpClient client;
                 try { client = listener.AcceptTcpClient(); }
                 catch { return; }
+                // Заблокированный адрес — закрыть сразу, ни байта в ответ
+                if (Blocklist.Refuse(IpBlocklist.SocketIp(client)))
+                {
+                    try { client.Close(); } catch { }
+                    continue;
+                }
                 if (Interlocked.Increment(ref connections) > MaxConnections)
                 {
                     Interlocked.Decrement(ref connections);
@@ -114,6 +123,7 @@ namespace TorrStreamTorrServer
             public Dictionary<string, string> Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             public byte[] Body = new byte[0];
             public Caller Caller;
+            public bool Refused;    // адрес заблокирован — в журнал не писать (IpBlocklist пишет сам)
             public string Header(string k) { return Headers.TryGetValue(k, out var v) ? v : null; }
             public bool Has(string k) { return Query.ContainsKey(k); }
             public string Q(string k) { return Query.TryGetValue(k, out var v) ? v : null; }
@@ -224,7 +234,7 @@ namespace TorrStreamTorrServer
             bool polling = req.Method == "OPTIONS" || path == "/echo" || path == "/version" || path == "/log" || path == "/cache" || path == "" || path == "/favicon.ico" ||
                 (path.StartsWith("/api/") && req.Method == "GET") ||
                 (path == "/torrents" && (req.BodyText.Contains("\"list\"") || req.BodyText.Contains("\"get\"")));
-            if (file || (polling && ms < 1000)) return;
+            if (file || req.Refused || (polling && ms < 1000)) return;
             // Адрес клиента: за nginx на этой машине — из X-Forwarded-For (Identify), а не 127.0.0.1
             string who = req.Caller?.Ip ?? Remote(client);
             if (!KnownRoute(path)) { LogScan(who, req.Method + " " + path); return; }
@@ -398,6 +408,17 @@ namespace TorrStreamTorrServer
         /// <summary>true — соединение можно держать для следующего запроса</summary>
         bool Handle(TcpClient client, Stream s, Request req)
         {
+            // Заблокированный адрес (за прокси — из X-Forwarded-For): 403 и закрыть.
+            // Приложение на этом устройстве (local.key) пускаем всегда
+            if (Blocklist.Refuse(ClientIp(client, req)) &&
+                !(!string.IsNullOrEmpty(localKey) && Accounts.SameText(req.Header("X-MonoServer-Local") ?? "", localKey)))
+            {
+                req.Refused = true;
+                var b = Encoding.UTF8.GetBytes("адрес заблокирован");
+                WriteHead(s, req, 403, "text/plain; charset=utf-8", b.Length, null, false);
+                if (req.Method != "HEAD") s.Write(b, 0, b.Length);
+                return false;
+            }
             if (req.Method == "OPTIONS") { WriteHead(s, req, 204, null, 0, null, req.KeepAlive); return true; }
             string path = req.Path.TrimEnd('/');
             try
@@ -405,6 +426,7 @@ namespace TorrStreamTorrServer
                 if (path == "/echo") return SendText(s, req, 200, TorrEngine.EchoVersion);
                 if (path == "/favicon.ico") { WriteHead(s, req, 204, null, 0, null, req.KeepAlive); return true; }
                 var c = req.Caller = Identify(client, req);
+                Blocklist.Saw(c.Ip, c.User != null || c.Remote != null || c.Local ? c.Who : "", req.Method + " " + (path.Length > 0 ? path : "/"));
                 if (path.StartsWith("/api/")) return Api(client, s, req, c, path);
                 if (path == "/version")
                 {
@@ -528,6 +550,20 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>Убрать торрент из списка пользователя (null — у всех) и, если не нужен, из движка</summary>
+        /// <summary>Несколько торрентов: у пользователя или (from == null) у всех — движок закрывает их разом</summary>
+        public void RemoveTorrents(IEnumerable<string> hashes, User from, string viewer)
+        {
+            var list = hashes.Where(h => !string.IsNullOrWhiteSpace(h)).Select(h => h.Trim().ToLowerInvariant()).Distinct().ToList();
+            if (from != null) { foreach (var h in list) RemoveTorrent(h, from, viewer); return; }
+            var users = accounts.Users();
+            foreach (var h in list)
+            {
+                foreach (var u in users) accounts.Forget(u, h);
+                lock (temp) temp.Remove(h);
+            }
+            engine.RemoveManyAsync(list).GetAwaiter().GetResult();
+        }
+
         public void RemoveTorrent(string hash, User from, string viewer)
         {
             if (string.IsNullOrEmpty(hash)) return;
@@ -956,13 +992,20 @@ namespace TorrStreamTorrServer
             var started = System.Diagnostics.Stopwatch.StartNew();
             long sent = 0, counted = 0;
             string how = "прервано";
-            log(e.Hash + ": файл " + f.Id + " с " + Mb(start) + (partial ? " (Range " + range + ")" : "") + ", " + Remote(client) + (c.User != null || c.Remote != null ? " (" + c.Who + ")" : ""));
+            log(e.Hash + ": файл " + f.Id + " с " + Mb(start) + (partial ? " (Range " + range + ")" : "") + ", " + c.Ip + (c.User != null || c.Remote != null ? " (" + c.Who + ")" : ""));
             try
             {
                 var buf = new byte[ChunkSize];
                 long left = length;
+                int blockVer = Blocklist.Version;
                 while (left > 0)
                 {
+                    // Адрес заблокировали, пока смотрит, — оборвать
+                    if (Blocklist.Version != blockVer)
+                    {
+                        blockVer = Blocklist.Version;
+                        if (Blocklist.Match(c.Ip) != null) { how = "адрес заблокирован"; return false; }
+                    }
                     int n = engine.Read(reader, buf, 0, (int)Math.Min(buf.Length, left), () => Gone(client));
                     if (n <= 0) return false;   // прервано — соединение не продолжаем
                     if (avi != null && start + sent < AviFix.HeadSize) AviFix.Patch(buf, n, start + sent, avi);

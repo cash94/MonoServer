@@ -169,6 +169,8 @@ download() {
     tar xzf "$tmp/$asset" -C "$tmp" || { rm -rf "$tmp"; return 1; }
     [ -f "$tmp/MonoServer" ] || { echo "В архиве нет программы MonoServer." >&2; rm -rf "$tmp"; return 1; }
     mkdir -p "$dest" && cp "$tmp/MonoServer" "$dest/MonoServer" && chmod +x "$dest/MonoServer" || { rm -rf "$tmp"; return 1; }
+    # GC на сегментах (1.0.36+): программа включает его сама, если файл рядом
+    [ -f "$tmp/libclrgc.so" ] && cp "$tmp/libclrgc.so" "$dest/libclrgc.so"
     # Скрипт из архива (1.0.12 и новее) — рядом, если обновляем не его же
     [ -f "$tmp/monoserver.sh" ] && [ "$dest" != "$HERE" ] && cp "$tmp/monoserver.sh" "$dest/monoserver.sh" && chmod +x "$dest/monoserver.sh"
     rm -rf "$tmp"
@@ -229,6 +231,10 @@ cmd_install() {
         $SUDO install -m 755 "$0" "$INSTALL_DIR/monoserver.sh" || exit 1
     fi
     [ -f "$HERE/THIRD-PARTY-NOTICES.txt" ] && $SUDO install -m 644 "$HERE/THIRD-PARTY-NOTICES.txt" "$INSTALL_DIR/" 2>/dev/null
+    # GC на сегментах (1.0.36+, меньше памяти): программа включает его сама, если файл рядом
+    if [ -f "$(dirname "$SRC_BIN")/libclrgc.so" ] && [ "$(readlink -f "$(dirname "$SRC_BIN")")" != "$(readlink -f "$INSTALL_DIR")" ]; then
+        $SUDO install -m 644 "$(dirname "$SRC_BIN")/libclrgc.so" "$INSTALL_DIR/libclrgc.so" 2>/dev/null
+    fi
     echo "$PORT" | $SUDO tee "$CONF" >/dev/null
     if [ "$SYSTEM" = 1 ]; then
         $SUDO mkdir -p "$DATA" && $SUDO chown "$RUN_USER" "$DATA"
@@ -299,6 +305,7 @@ cmd_update() {
     SCTL stop "$NAME"
     $SUDO install -m 755 "$tmp/MonoServer" "$INSTALL_DIR/MonoServer" || { SCTL start "$NAME"; rm -rf "$tmp"; die "Не удалось заменить программу — служба запущена прежняя."; }
     [ -f "$tmp/monoserver.sh" ] && $SUDO install -m 755 "$tmp/monoserver.sh" "$INSTALL_DIR/monoserver.sh"
+    [ -f "$tmp/libclrgc.so" ] && $SUDO install -m 644 "$tmp/libclrgc.so" "$INSTALL_DIR/libclrgc.so"
     rm -rf "$tmp"
     SCTL start "$NAME" || die "Служба не запустилась — журнал: $0 log"
     local i

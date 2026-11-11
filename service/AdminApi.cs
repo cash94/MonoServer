@@ -12,7 +12,9 @@
 //   GET  /api/traffic?days=N; GET /api/streams
 //   GET|POST /api/access {require_auth, lan_without_auth}
 //   GET|POST /api/master {enabled, local_max, nodes} | {action:"new_node_key"}
-//   POST /api/torrents {action:"remove", hash[, login]} — у пользователя или у всех
+//   POST /api/torrents {action:"remove", hash | hashes:[…][, login]} — у пользователя или у всех
+//   GET  /api/blocklist — заблокированные адреса и недавние клиенты;
+//   POST /api/blocklist {action:"add", rule | rules:[…], note} | {action:"remove", rule | rules:[…]}
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -98,9 +100,13 @@ namespace TorrStreamTorrServer
                     string login = o.Str("login");
                     User from = null;
                     if (!string.IsNullOrEmpty(login) && (from = accounts.Get(login)) == null) return Error(s, req, 404, "нет такого пользователя");
-                    RemoveTorrent(o.Str("hash"), from, c.Viewer);
+                    var hashes = Strings(o, "hashes");
+                    if (hashes.Count == 0) hashes.Add(o.Str("hash"));
+                    RemoveTorrents(hashes, from, c.Viewer);
+                    if (hashes.Count > 1) log("торренты: удалено " + hashes.Count + (from != null ? " у " + from.Login : " у всех"));
                     return Ok(s, req);
                 }
+                case "/api/blocklist": return BlocklistRoute(s, req, c);
             }
             return Error(s, req, 404, "not found");
         }
@@ -317,6 +323,49 @@ namespace TorrStreamTorrServer
                     return Error(s, req, 400, "unknown action: " + action);
             }
             return err != null ? Error(s, req, 400, err) : Ok(s, req);
+        }
+
+        /// <summary>Строки из массива key (или пустой список)</summary>
+        static List<string> Strings(Dictionary<string, object> o, string key)
+        {
+            var res = new List<string>();
+            if (o.TryGetValue(key, out var v) && v is List<object> a)
+                foreach (var x in a) if (x is string str && str.Trim().Length > 0) res.Add(str.Trim());
+            return res;
+        }
+
+        bool BlocklistRoute(Stream s, Request req, Caller c)
+        {
+            if (req.Method == "POST")
+            {
+                var o = Body(req);
+                var list = Strings(o, "rules");
+                if (list.Count == 0 && !string.IsNullOrWhiteSpace(o.Str("rule")))
+                    list.AddRange(o.Str("rule").Split(new[] { ',', ';', ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries));
+                switch (o.Str("action"))
+                {
+                    case "add":
+                    {
+                        string err = Blocklist.Add(list, o.Str("note"), c.Ip);
+                        if (err != null) return Error(s, req, 400, err);
+                        break;
+                    }
+                    case "remove": Blocklist.Remove(list); break;
+                    default: return Error(s, req, 400, "unknown action");
+                }
+            }
+            var w = new JsonWriter().Obj().Prop("my_ip", c.Ip ?? "").Key("rules").Arr();
+            foreach (var r in Blocklist.Rules())
+                w.Obj().Prop("rule", r.Text).Prop("note", r.Note).Prop("added", r.Added).Prop("hits", r.Hits).Prop("last_hit", r.LastHit).EndObj();
+            w.EndArr().Key("recent").Arr();
+            foreach (var x in Blocklist.Seen())
+            {
+                var rule = Blocklist.Match(x.Ip);
+                w.Obj().Prop("ip", x.Ip).Prop("who", x.Who).Prop("what", x.What).Prop("first", x.First).Prop("last", x.Last).Prop("count", x.Count)
+                    .Prop("lan", IsLan(x.Ip)).Prop("blockable", IpBlocklist.Blockable(x.Ip))
+                    .Prop("blocked", rule != null ? rule.Text : "").EndObj();
+            }
+            return SendJson(s, req, 200, w.EndArr().EndObj().ToString());
         }
 
         bool StreamsList(Stream s, Request req)

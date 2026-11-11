@@ -24,9 +24,19 @@ namespace TorrStreamTorrServer.Utp
 
         internal void Return(BufferReleaser.Buffer buffer)
         {
-            // Сверх этого — отдаём сборщику мусора: всплеск не держим в памяти навсегда
-            if (pool.Count < 4096)
+            // Сверх этого — отдаём сборщику мусора: всплеск не держим в памяти навсегда.
+            // 1024 × 1,5 КБ — с запасом на поток в десятки МБ/с (было 4096: на сервере
+            // в простое лежало 3 тыс. буферов, ~6 МБ)
+            if (pool.Count < 1024)
                 pool.Add(buffer);
+        }
+
+        /// <summary>Открытых торрентов нет — оставить keep буферов; байт освобождено</summary>
+        public long Trim(int keep = 64)
+        {
+            long freed = 0;
+            while (pool.Count > keep && pool.TryTake(out _)) freed += BufferSize;
+            return freed;
         }
     }
 }

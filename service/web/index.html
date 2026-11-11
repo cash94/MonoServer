@@ -85,7 +85,16 @@ header.open #info { display: block; }
 /* Карточки торрентов */
 .tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
 .tcard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: grid; grid-template-columns: 78px 1fr; gap: 14px; align-items: start; min-width: 0; box-shadow: var(--shadow); transition: border-color .15s, transform .15s; }
+.tcard { position: relative; }
 .tcard:hover { border-color: var(--line2); }
+.tcard.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-bg), var(--shadow); }
+.tsel { position: absolute; top: 6px; left: 6px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: rgba(10,12,18,.55); cursor: pointer; opacity: .75; transition: opacity .15s; }
+.tcard:hover .tsel, .tcard.sel .tsel, .tgrid.selecting .tsel { opacity: 1; }
+.tsel input { margin: 0; cursor: pointer; }
+.selbar { position: sticky; top: 8px; z-index: 5; display: none; margin: 0 2px 10px; padding: 8px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--accent); box-shadow: var(--shadow); }
+.selbar.on { display: flex; }
+.selbar b { font-variant-numeric: tabular-nums; }
+.ip-blocked { color: var(--bad); font-size: 12px; }
 .tcard.active { border-color: rgba(60,207,116,.35); }
 .tposter { width: 78px; height: 112px; border-radius: 10px; background: linear-gradient(140deg, var(--accent), var(--accent2)); overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: pointer; color: rgba(255,255,255,.92); font-size: 30px; font-weight: 700; }
 .tposter img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -334,7 +343,15 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     <div class="row between" style="margin:2px 2px 10px">
       <input id="list-filter" class="grow" placeholder="Поиск по названию" autocomplete="off" type="search">
       <select id="list-owner" title="Чьи торренты показывать"><option value="">Все пользователи</option></select>
+      <label class="muted" title="Выбрать все показанные торренты (Shift+клик по флажку — диапазон)"><input type="checkbox" id="sel-all"> выбрать все</label>
       <span class="muted hide-sm" id="list-time"></span>
+    </div>
+    <div class="selbar row between" id="selbar">
+      <span>Выбрано: <b id="sel-count">0</b></span>
+      <span class="row">
+        <button class="btn small" type="button" id="sel-none">Снять выбор</button>
+        <button class="btn small danger" type="button" id="sel-del">Удалить выбранные</button>
+      </span>
     </div>
     <div class="tgrid" id="tlist"><div class="empty">Загрузка…</div></div>
   </section>
@@ -420,9 +437,34 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     <div class="card">
       <div class="row between"><h2 style="margin:0">Сейчас смотрят</h2><span class="muted" id="streams-sum"></span></div>
       <div class="scroll-x"><table style="margin-top:8px">
-        <thead><tr><th>Кто</th><th>Что</th><th>Адрес</th><th class="num">Отдано</th><th class="num">Скорость</th><th class="num">Время</th></tr></thead>
+        <thead><tr><th>Кто</th><th>Что</th><th>Адрес</th><th class="num">Отдано</th><th></th><th class="num">Скорость</th><th class="num">Время</th></tr></thead>
         <tbody id="streams-body"></tbody>
       </table></div>
+    </div>
+
+    <div class="card">
+      <div class="row between"><h2 style="margin:0">Блокировка адресов</h2><span class="muted" id="bl-my"></span></div>
+      <p class="muted" style="margin:6px 0 0">С заблокированного адреса служба не отвечает совсем: ни веб-интерфейс, ни API, ни потоки — идущий просмотр обрывается. Можно указать подсеть: <span class="mono">1.2.3.0/24</span>. Этот же список — файл <span class="mono">blocked-ips.txt</span> в данных службы. Адрес этого устройства (127.0.0.1) не блокируется.</p>
+      <form id="bl-form" class="row" style="margin-top:10px" autocomplete="off">
+        <input id="bl-rule" class="grow" placeholder="IP или подсеть, можно несколько через запятую" spellcheck="false">
+        <input id="bl-note" class="grow" placeholder="Заметка (необязательно)">
+        <button class="btn danger" type="submit">Заблокировать</button>
+      </form>
+      <div class="muted" id="bl-msg" style="margin-top:6px"></div>
+      <div class="scroll-x"><table style="margin-top:8px">
+        <thead><tr><th>Адрес</th><th>Заметка</th><th>Добавлен</th><th class="num">Отказов</th><th>Последний отказ</th><th></th></tr></thead>
+        <tbody id="bl-rules"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div class="row between"><h2 style="margin:0">Недавние адреса</h2><span class="muted" id="bl-recent-sum"></span></div>
+      <p class="muted" style="margin:6px 0 0">Кто обращался к службе с её запуска (до 300 адресов, свежие сверху).</p>
+      <div class="scroll-x"><table style="margin-top:8px">
+        <thead><tr><th>Адрес</th><th>Кто</th><th>Последний запрос</th><th class="num">Запросов</th><th>Когда</th><th></th></tr></thead>
+        <tbody id="bl-recent"></tbody>
+      </table></div>
+      <div class="row" style="margin-top:8px"><button class="btn small" type="button" id="bl-more" style="display:none"></button></div>
     </div>
   </section>
 
@@ -646,6 +688,8 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
   var openFiles = {};   // hash → раскрыт список файлов
   var cacheMb = 64;     // кэш на торрент (из /version) — для полоски в карточке
   var listFilter = '';
+  var selected = {};      // hash → выбран (массовое удаление)
+  var lastSelHash = null; // для Shift+клик — выбрать диапазон
 
   var STAT_NAMES = ['Добавлен', 'Получение метаданных', 'Предзагрузка', 'Работает', 'Закрыт', 'В базе'];
   var STAT_CLASS = ['info', 'info', 'warn', 'ok', '', ''];
@@ -672,6 +716,10 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     post('/torrents', { action: 'list' }, function (err, list) {
       if (err) { $('list-time').innerHTML = '<span class="err-text">' + esc(err) + '</span>'; return; }
       torrents = list || [];
+      // Выбор — только среди тех, что ещё есть
+      var have = {};
+      for (var i = 0; i < torrents.length; i++) have[torrents[i].hash] = 1;
+      for (var h in selected) if (!have[h]) delete selected[h];
       $('list-time').textContent = new Date().toLocaleTimeString();
       fillOwnerSelect();
       renderTorrents();
@@ -756,7 +804,8 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
 
   function cardHtml(t) {
     var p = cardParts(t);
-    return '<article class="tcard' + (isActive(t) ? ' active' : '') + '" data-hash="' + esc(t.hash) + '">' +
+    return '<article class="tcard' + (isActive(t) ? ' active' : '') + (selected[t.hash] ? ' sel' : '') + '" data-hash="' + esc(t.hash) + '">' +
+      '<label class="tsel" title="Выбрать (Shift — диапазон)"><input type="checkbox" data-act="sel"' + (selected[t.hash] ? ' checked' : '') + '></label>' +
       '<div class="tposter" data-act="files">' + posterHtml(t) + '</div>' +
       '<div class="tbody">' +
         '<div class="ttitle" data-act="files" title="' + esc(t.title || t.name || t.hash) + '">' + esc(t.title || t.name || t.hash) + '</div>' +
@@ -773,6 +822,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
   var torrentsLayout = '';
   function renderTorrents() {
     var box = $('tlist'), list = visibleTorrents();
+    updateSelBar(list);
     if (!list.length) {
       torrentsLayout = '';
       box.innerHTML = '<div class="empty">' + (torrents.length ? 'Ничего не нашлось' : 'Торрентов нет — добавьте magnet выше или начните просмотр в TorrStream') + '</div>';
@@ -816,18 +866,79 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     return html + '</ul>';
   }
 
+  function selCount() { var n = 0; for (var h in selected) n++; return n; }
+  function updateSelBar(list) {
+    list = list || visibleTorrents();
+    var n = selCount(), shown = 0;
+    for (var i = 0; i < list.length; i++) if (selected[list[i].hash]) shown++;
+    $('selbar').className = 'selbar row between' + (n ? ' on' : '');
+    $('tlist').className = 'tgrid' + (n ? ' selecting' : '');
+    $('sel-count').textContent = n + (shown < n ? ' (показано ' + shown + ')' : '');
+    var all = $('sel-all');
+    all.checked = list.length > 0 && shown === list.length;
+    all.indeterminate = shown > 0 && shown < list.length;
+  }
+  function setSelected(hash, on) {
+    if (on) selected[hash] = true; else delete selected[hash];
+    var cards = $('tlist').children;
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute('data-hash') !== hash) continue;
+      cards[i].className = cards[i].className.replace(/\s*\bsel\b/g, '') + (on ? ' sel' : '');
+      var cb = cards[i].querySelector('input[data-act="sel"]');
+      if (cb) cb.checked = on;
+    }
+  }
+  $('sel-all').onchange = function () {
+    var list = visibleTorrents(), on = this.checked;
+    for (var i = 0; i < list.length; i++) setSelected(list[i].hash, on);
+    updateSelBar(list);
+  };
+  $('sel-none').onclick = function () {
+    for (var h in selected) setSelected(h, false);
+    updateSelBar();
+  };
+  $('sel-del').onclick = function () {
+    var hashes = [], names = [], btn = this;
+    for (var i = 0; i < torrents.length; i++) if (selected[torrents[i].hash]) { hashes.push(torrents[i].hash); names.push(torrents[i].title || torrents[i].name || torrents[i].hash); }
+    if (!hashes.length) return;
+    var preview = names.slice(0, 10).join('\n• ') + (names.length > 10 ? '\n… и ещё ' + (names.length - 10) : '');
+    if (!confirm('Удалить ' + hashes.length + ' торрент(ов) у всех пользователей и из базы сервера?\n\n• ' + preview)) return;
+    btn.disabled = true;
+    btn.textContent = 'Удаляю…';
+    post('/api/torrents', { action: 'remove', hashes: hashes }, function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Удалить выбранные';
+      if (err) { alert('Не удалось удалить: ' + err); return; }
+      for (var j = 0; j < hashes.length; j++) delete selected[hashes[j]];
+      loadTorrents();
+    });
+  };
+
   $('list-filter').oninput = function () { listFilter = this.value.trim(); torrentsLayout = ''; renderTorrents(); };
 
   $('tlist').onclick = function (ev) {
     var el = ev.target;
     while (el && el !== this && !el.getAttribute('data-act')) el = el.parentNode;
     if (!el || el === this) return;
-    ev.preventDefault();
+    // Флажок выбора переключается сам: preventDefault вернул бы его назад
+    if (el.getAttribute('data-act') !== 'sel') ev.preventDefault();
     var card = el;
     while (card && card !== this && !card.getAttribute('data-hash')) card = card.parentNode;
     var hash = card && card !== this ? card.getAttribute('data-hash') : null;
     if (!hash) return;
     var act = el.getAttribute('data-act');
+    if (act === 'sel') {
+      var on = el.checked;
+      if (ev.shiftKey && lastSelHash && lastSelHash !== hash) {
+        var list = visibleTorrents(), a = -1, b = -1;
+        for (var k = 0; k < list.length; k++) { if (list[k].hash === lastSelHash) a = k; if (list[k].hash === hash) b = k; }
+        if (a >= 0 && b >= 0) for (var m = Math.min(a, b); m <= Math.max(a, b); m++) setSelected(list[m].hash, on);
+      }
+      setSelected(hash, on);
+      lastSelHash = hash;
+      updateSelBar();
+      return;
+    }
     if (act === 'files') { openFiles[hash] = !openFiles[hash]; renderTorrents(); }
     else if (act === 'cache') { cacheHash = hash; fillCacheSelect(); showTab('cache', hash); }
     else if (act === 'drop') post('/torrents', { action: 'drop', hash: hash }, function () { loadTorrents(); });
@@ -1495,13 +1606,102 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
         var rate = dt > 0 && prevSent[s.id] != null ? (s.sent - prevSent[s.id]) / dt : null;
         html += '<tr><td>' + esc(s.who) + '</td><td><div>' + esc(s.title || s.hash) + '</div><small class="muted">' + esc(s.file) + '</small></td>' +
           '<td class="mono">' + esc(s.ip) + '</td><td class="num">' + bytes(s.sent) + '</td>' +
+          '<td>' + blockButton(s.ip, s.who) + '</td>' +
           '<td class="num">' + (rate != null ? speed(Math.max(0, rate)) : '—') + '</td><td class="num">' + duration(s.seconds) + '</td></tr>';
       }
       prevSent = next; prevAt = now;
-      $('streams-body').innerHTML = html || '<tr><td colspan="6" class="empty">Никто не смотрит</td></tr>';
+      $('streams-body').innerHTML = html || '<tr><td colspan="7" class="empty">Никто не смотрит</td></tr>';
       $('streams-sum').textContent = 'зрителей ' + d.viewers + ' · потоков ' + d.streams.length;
     });
   }
+
+  // ==================== блокировка адресов ====================
+  var blData = null, blAll = false;
+  function isLocalIp(ip) { return !ip || ip === '?' || /^127\./.test(ip) || ip === '::1'; }
+  function blockButton(ip, who) {
+    if (isLocalIp(ip) || (blData && ip === blData.my_ip)) return '';
+    return '<button class="btn small danger" type="button" data-block="' + esc(ip) + '" data-who="' + esc(who || '') + '" title="Больше не пускать этот адрес">Заблокировать</button>';
+  }
+  function dateTime(unix) { return unix ? new Date(unix * 1000).toLocaleString() : '—'; }
+  function agoText(unix) {
+    if (!unix) return '—';
+    var s = Math.max(0, Math.round(Date.now() / 1000 - unix));
+    return s < 60 ? s + ' с назад' : s < 3600 ? Math.floor(s / 60) + ' мин назад' : s < 86400 ? Math.floor(s / 3600) + ' ч назад' : dateTime(unix);
+  }
+  function renderBlocklist() {
+    var d = blData;
+    if (!d) return;
+    $('bl-my').innerHTML = d.my_ip ? 'ваш адрес: <span class="mono">' + esc(d.my_ip) + '</span>' : '';
+    var html = '';
+    for (var i = 0; i < d.rules.length; i++) {
+      var r = d.rules[i];
+      html += '<tr><td class="mono">' + esc(r.rule) + '</td><td>' + esc(r.note) + '</td><td>' + dateTime(r.added) + '</td>' +
+        '<td class="num">' + r.hits + '</td><td>' + agoText(r.last_hit) + '</td>' +
+        '<td><button class="btn small" type="button" data-unblock="' + esc(r.rule) + '">Снять</button></td></tr>';
+    }
+    setHtml('bl-rules', html || '<tr><td colspan="6" class="empty">Заблокированных адресов нет</td></tr>');
+    var rec = d.recent || [], limit = blAll ? rec.length : 30, rh = '';
+    for (var j = 0; j < rec.length && j < limit; j++) {
+      var c = rec[j];
+      rh += '<tr><td class="mono">' + esc(c.ip) + (c.lan ? ' <small class="muted">дом. сеть</small>' : '') + '</td><td>' + esc(c.who || '—') + '</td>' +
+        '<td class="mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.what) + '">' + esc(c.what) + '</td>' +
+        '<td class="num">' + c.count + '</td><td>' + agoText(c.last) + '</td>' +
+        '<td>' + (c.blocked ? '<span class="ip-blocked">заблокирован' + (c.blocked !== c.ip ? ' (' + esc(c.blocked) + ')' : '') + '</span>' : c.blockable ? blockButton(c.ip, c.who) : '') + '</td></tr>';
+    }
+    setHtml('bl-recent', rh || '<tr><td colspan="6" class="empty">Пока никого</td></tr>');
+    $('bl-recent-sum').textContent = rec.length ? 'адресов ' + rec.length : '';
+    var more = $('bl-more');
+    more.style.display = rec.length > 30 ? '' : 'none';
+    more.textContent = blAll ? 'Показать 30' : 'Показать все (' + rec.length + ')';
+  }
+  function loadBlocklist() {
+    request('GET', '/api/blocklist', null, function (err, d) {
+      if (err || !d) { $('bl-msg').innerHTML = errHtml(err || 'нет ответа'); return; }
+      blData = d;
+      renderBlocklist();
+    });
+  }
+  function blockPost(body, done) {
+    post('/api/blocklist', body, function (err, d) {
+      $('bl-msg').innerHTML = err ? errHtml(err) : '';
+      if (d && d.rules) { blData = d; renderBlocklist(); }
+      if (done) done(err);
+      if (!err) loadStreams();
+    });
+  }
+  $('bl-more').onclick = function () { blAll = !blAll; renderBlocklist(); };
+  $('bl-form').onsubmit = function (ev) {
+    ev.preventDefault();
+    var rule = $('bl-rule').value.trim();
+    if (!rule) return;
+    blockPost({ action: 'add', rule: rule, note: $('bl-note').value.trim() }, function (err) {
+      if (!err) { $('bl-rule').value = ''; $('bl-note').value = ''; $('bl-msg').textContent = 'Заблокировано: ' + rule; }
+    });
+  };
+  // Кнопки «Заблокировать» / «Снять» — в таблицах, которые перерисовываются раз в
+  // секунду: ловим на нажатии (mousedown), иначе клик мог попасть между перерисовками
+  function blockAction(ev) {
+    if (ev.type === 'mousedown' && ev.button !== 0) return;
+    if (ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
+    var el = ev.target;
+    while (el && el.getAttribute && !el.getAttribute('data-block') && !el.getAttribute('data-unblock')) el = el.parentNode;
+    if (!el || !el.getAttribute) return;
+    ev.preventDefault();
+    var ip = el.getAttribute('data-block');
+    if (ip) {
+      var who = el.getAttribute('data-who');
+      var note = prompt('Заблокировать ' + ip + (who && who !== 'без входа' ? ' (' + who + ')' : '') + '?\nС этого адреса служба перестанет отвечать, идущий просмотр оборвётся.\n\nЗаметка (необязательно):', who && who !== 'без входа' ? who : '');
+      if (note === null) return;
+      blockPost({ action: 'add', rule: ip, note: note });
+    } else {
+      var rule = el.getAttribute('data-unblock');
+      if (confirm('Снять блокировку с ' + rule + '?')) blockPost({ action: 'remove', rule: rule });
+    }
+  }
+  ['streams-body', 'bl-rules', 'bl-recent'].forEach(function (id) {
+    $(id).addEventListener('mousedown', blockAction);
+    $(id).addEventListener('keydown', blockAction);
+  });
 
   // ==================== трафик ====================
   var trDays = 30, trMetric = 'http', traffic = null;
@@ -1686,7 +1886,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     if (tab === 'cache' && $('cache-auto').checked) loadCache();
     if (tab === 'log') loadLog();
     if (tab === 'settings' && now) loadSettings();
-    if (tab === 'users') { if (now) loadAccess(); if (slow) loadUsers(); loadStreams(); }
+    if (tab === 'users') { if (now) loadAccess(); if (slow) { loadUsers(); loadBlocklist(); } loadStreams(); }
     if (tab === 'traffic' && slow) loadTraffic();
     if (tab === 'master' && slow) loadMaster();
   }

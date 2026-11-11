@@ -12,6 +12,7 @@ namespace TorrStreamTorrServer
     {
         static void Main(string[] args)
         {
+            GcSwitch.Apply(args);   // до всего: перезапуск себя с GC на сегментах (GcSwitch.cs)
             int port = args.Length > 0 ? int.Parse(args[0]) : TorrServerHost.DefaultPort;
             string data = args.Length > 1 ? args[1] : Path.Combine(Path.GetTempPath(), "torrstream-torrserver");
             // База пользователей — LiteDB (на Tizen — JSON, см. AccountsStore.cs);

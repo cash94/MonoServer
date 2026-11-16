@@ -381,6 +381,7 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
         <button class="btn" id="log-pause" type="button">Пауза</button>
         <button class="btn" id="log-save" type="button">Скачать</button>
         <button class="btn" id="log-clear" type="button">Очистить экран</button>
+        <a class="btn" href="/log?prev" target="_blank" rel="noopener" title="Журнал прошлого запуска службы из файла — что было перед падением или перезапуском">Прошлый запуск</a>
       </div>
     </div>
     <div id="log"></div>
@@ -650,6 +651,10 @@ canvas { display: block; width: 100%; image-rendering: pixelated; border-radius:
     if (v.error) html += '<dt class="err-text">Ошибка</dt><dd class="err-text">' + esc(v.error) + '</dd>';
     // Что не запустилось при старте службы (например, база пользователей) — служба при этом работает
     if (v.problem) html += '<dt class="err-text">Проблема</dt><dd class="err-text">' + esc(v.problem) + '</dd>';
+    // Прошлый запуск не дошёл до штатной остановки — журнал его в «Журнал → Прошлый запуск»
+    if (v.prev_run === 'crashed' || v.prev_run === 'killed')
+      html += '<dt class="err-text">Прошлый запуск</dt><dd class="err-text">' + (v.prev_run === 'crashed' ? 'упал с ошибкой' : 'оборвался: закрыла система или пропало питание') +
+        ' — <a href="/log?prev" target="_blank" rel="noopener">журнал</a></dd>';
     $('ver').innerHTML = html;
     if (v.cache_mb) cacheMb = v.cache_mb;
     // Память — первой: на телефоне строка обрезается справа

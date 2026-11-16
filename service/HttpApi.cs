@@ -7,7 +7,7 @@
 //   POST /cache {"action":"get","hash":…}   — куски в памяти, читатели
 //   POST /settings {"action": get|set|def}  — BTSets (TorrSettings.cs)
 //   GET  /download/<МБ>                     — нули для замера скорости
-//   GET  /version, /log[?after=N]           — служебное: состояние, журнал
+//   GET  /version, /log[?after=N|?prev]     — служебное: состояние, журнал (prev — прошлого запуска, LogFile.cs)
 //   GET  /                                  — страница отладки (WebPage.cs, web/index.html)
 //   /api/…                                  — MonoServer: вход, пользователи, трафик,
 //                                             балансировка (AdminApi.cs)
@@ -45,6 +45,8 @@ namespace TorrStreamTorrServer
         public readonly IpBlocklist Blocklist;
         /// <summary>Отдавать код первого входа странице приложения на этом устройстве (Tizen)</summary>
         public bool LocalSetupCode;
+        /// <summary>Журнал в файле — для /log?prev; null — нет</summary>
+        public LogFile FileLog;
 
         /// <summary>Что не запустилось при старте (Host.Start) — в /version «problem»; null — всё в порядке</summary>
         public string Problems { get; private set; }
@@ -54,7 +56,7 @@ namespace TorrStreamTorrServer
             lock (this) Problems = Problems == null ? text : Problems + "; " + text;
         }
         public readonly Balancer Balancer;
-        TcpListener listener;
+        volatile TcpListener listener;
         int connections;
 
         /// <summary>localKey — ключ приложения на том же устройстве (local.key в данных службы): с ним — как admin</summary>
@@ -72,27 +74,131 @@ namespace TorrStreamTorrServer
 
         public int Port => port;
 
+        /// <summary>Порт занят — исключение (Host: «стоит другой TorrServer»)</summary>
         public void Start()
         {
-            listener = new TcpListener(IPAddress.Any, port);
-            listener.Start(32);
-            new Thread(AcceptLoop) { IsBackground = true, Name = "http-accept" }.Start();
+            Listen();
             log("HTTP: порт " + port);
+            // Раз в 30 с: нить приёма жива? Без неё служба работает, а порт не отвечает —
+            // и повторный запуск (страница пакета, sdb execute) этого не лечит: процесс тот же
+            watchdog = new Timer(_ =>
+            {
+                if (stopping) return;
+                var t = acceptThread;
+                if (t == null || !t.IsAlive) Relisten("нить приёма HTTP завершилась");
+            }, null, 30000, 30000);
+        }
+
+        void Listen()
+        {
+            var l = new TcpListener(IPAddress.Any, port);
+            l.Start(32);
+            listener = l;
+            var t = new Thread(() => AcceptLoop(l)) { IsBackground = true, Name = "http-accept" };
+            acceptThread = t;
+            t.Start();
+        }
+
+        /// <summary>
+        /// Открыть порт заново: прежний слушатель закрыть (принятые соединения —
+        /// потоки — не трогаются), новый — с новой нитью приёма. Порт занят — ещё раз
+        /// через 5 с (пока не выйдет или служба не остановится).
+        /// broken — слушатель, у которого сломался приём: его уже заменили — ничего не делать
+        /// </summary>
+        void Relisten(string why, TcpListener broken = null)
+        {
+            // Уже открывают заново (сторож, цикл приёма и повторный запуск — разом) — не дублировать
+            if (!Monitor.TryEnter(relistenLock)) return;
+            try
+            {
+                if (stopping) return;
+                var old = listener;
+                if (broken != null && old != broken) return;
+                log("HTTP: " + why + " — открываю порт " + port + " заново");
+                // Сначала забыть: цикл приёма старого слушателя увидит, что он не текущий, и
+                // выйдет молча, а не примет свою ошибку за новую поломку
+                listener = null;
+                try { old?.Stop(); } catch { }
+                for (int i = 0; !stopping; i++)
+                {
+                    try { Listen(); log("HTTP: порт " + port + " снова принимает"); return; }
+                    catch (Exception e)
+                    {
+                        if (i == 0 || i % 12 == 0) log("HTTP: порт " + port + " не открылся — " + e.Message);
+                        Thread.Sleep(5000);
+                    }
+                }
+            }
+            finally { Monitor.Exit(relistenLock); }
+        }
+
+        /// <summary>
+        /// Порт принимает? Подключиться к себе (loopback и адреса в сети); не вышло ни
+        /// так, ни так — открыть заново. Для повторного запуска службы (Tizen:
+        /// OnAppControlReceived — страница пакета или клиент будят «упавшую»)
+        /// </summary>
+        public bool EnsureListening()
+        {
+            if (stopping) return false;
+            // Нить приёма умерла — подключение к себе всё равно пройдёт (очередь ядра), а ответа не будет
+            var t = acceptThread;
+            if (t == null || !t.IsAlive)
+            {
+                Relisten("нить приёма HTTP завершилась");
+                return false;
+            }
+            var addrs = new List<string> { "127.0.0.1" };
+            try { addrs.AddRange(TorrEngine.LanAddresses()); } catch { }
+            foreach (var a in addrs)
+            {
+                try
+                {
+                    using (var c = new TcpClient())
+                        if (c.ConnectAsync(a, port).Wait(2000) && c.Connected) return true;
+                }
+                catch { }
+            }
+            Relisten("порт не отвечает");
+            return false;
         }
 
         public void Stop()
         {
+            stopping = true;
+            try { watchdog?.Dispose(); } catch { }
             try { listener?.Stop(); } catch { }
             Balancer.Stop();
         }
 
-        void AcceptLoop()
+        volatile bool stopping;
+        volatile Thread acceptThread;
+        Timer watchdog;
+        readonly object relistenLock = new object();
+
+        void AcceptLoop(TcpListener l)
         {
-            while (true)
+            int failures = 0;
+            while (!stopping && l == listener)
             {
                 TcpClient client;
-                try { client = listener.AcceptTcpClient(); }
-                catch { return; }
+                try { client = l.AcceptTcpClient(); failures = 0; }
+                catch (Exception e)
+                {
+                    // Раньше любая ошибка приёма молча завершала нить — и порт глох до
+                    // перезапуска процесса. Временные (кончились дескрипторы, сеть
+                    // переподключилась) — переждать; слушатель закрыт или ошибки подряд — заново
+                    if (stopping || l != listener) return;
+                    failures++;
+                    if (failures <= 3 || failures % 50 == 0) log("HTTP: ошибка приёма (" + failures + ") — " + e.Message);
+                    if (e is ObjectDisposedException || e is InvalidOperationException || failures >= 20)
+                    {
+                        // Здесь же, в уходящей нити: новую нить приёма заводит Relisten
+                        Relisten("приём сломался: " + e.GetType().Name, l);
+                        return;
+                    }
+                    Thread.Sleep(Math.Min(100 * failures, 2000));
+                    continue;
+                }
                 // Заблокированный адрес — закрыть сразу, ни байта в ответ
                 if (Blocklist.Refuse(IpBlocklist.SocketIp(client)))
                 {
@@ -106,13 +212,25 @@ namespace TorrStreamTorrServer
                     continue;
                 }
                 // Своя нить на соединение: поток файла часами ждёт куски, а пул
-                // потоков нужен самому MonoTorrent
-                var t = new Thread(() =>
+                // потоков нужен самому MonoTorrent. Нить не создалась (мало памяти) —
+                // отказать этому клиенту, а не уронить приём (исключение здесь
+                // завершало процесс)
+                try
                 {
-                    try { Serve(client); }
-                    finally { Interlocked.Decrement(ref connections); }
-                }) { IsBackground = true, Name = "http" };
-                t.Start();
+                    var t = new Thread(() =>
+                    {
+                        try { Serve(client); }
+                        finally { Interlocked.Decrement(ref connections); }
+                    }) { IsBackground = true, Name = "http" };
+                    t.Start();
+                }
+                catch (Exception e)
+                {
+                    Interlocked.Decrement(ref connections);
+                    try { client.Close(); } catch { }
+                    log("HTTP: нить для соединения не создалась — " + e.Message);
+                    Thread.Sleep(200);
+                }
             }
         }
 
@@ -442,6 +560,12 @@ namespace TorrStreamTorrServer
                 if (path == "/log")
                 {
                     if (!c.Admin) return Unauthorized(s, req, c);
+                    // ?prev — журнал прошлого запуска из файла: что было перед падением
+                    if (req.Has("prev"))
+                    {
+                        string prev = FileLog?.Previous();
+                        return prev != null ? SendText(s, req, 200, prev) : SendText(s, req, 404, "журнала прошлого запуска нет");
+                    }
                     // ?after=N — страница отладки: строки после N-й, JSON
                     if (req.Has("after") && journal != null)
                     {

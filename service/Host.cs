@@ -20,8 +20,11 @@ namespace TorrStreamTorrServer
         /// (/api/setup/code) — для Tizen, где журнала службы не видно
         /// </summary>
         public bool LocalSetupCode;
-        Timer trafficTimer;
+        /// <summary>Журнал в файле (LogFile.cs) — после Start</summary>
+        public LogFile FileLog { get; private set; }
+        Timer trafficTimer, memoryTimer;
         long btDownSeen, btUpSeen;
+        long rssLogged = -1000, rssLoggedAt;
 
         /// <summary>
         /// Порт занят (стоит другой TorrServer) — исключение от HttpApi.Start.
@@ -31,21 +34,33 @@ namespace TorrStreamTorrServer
         /// </summary>
         public void Start(string dataDir, int port, Action<string> sink)
         {
+            Directory.CreateDirectory(dataDir);
+            // Файл — первым: если служба упадёт на старте, причина останется в previous.log
+            FileLog = new LogFile(dataDir);
+            var file = FileLog;
             Action<string> log = m =>
             {
                 Journal.Add(m);
+                file.Add(m);
                 if (sink != null) sink(m);
+            };
+            // Падение процесса: строку — сразу на диск, иначе она пропадёт вместе с ним
+            AppDomain.CurrentDomain.UnhandledException += (s, a) =>
+            {
+                log("необработанная ошибка: " + a.ExceptionObject);
+                file.Flush();
             };
             // GC на сегментах — pc/GcSwitch.cs (Linux): видно, включился ли
             string gc = Environment.GetEnvironmentVariable("DOTNET_GCName");
             log("MonoServer " + TorrEngine.ServiceVersion + ", " + System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription +
                 (string.IsNullOrEmpty(gc) ? "" : ", GC на сегментах (" + gc + ")"));
-            Directory.CreateDirectory(dataDir);
-            Engine = new TorrEngine(dataDir, log);
+            if (file.PreviousRun == "crashed") log("прошлый запуск упал (последняя запись " + file.PreviousLast + ") — журнал: /log?prev");
+            else if (file.PreviousRun == "killed") log("прошлый запуск оборвался без остановки (последняя запись " + file.PreviousLast + "): процесс закрыла система — нехватка памяти, сторож — или пропало питание; журнал: /log?prev");
+            Engine = new TorrEngine(dataDir, log) { PreviousRun = file.PreviousRun };
             Accounts = new Accounts(dataDir, log);
             // HTTP — первым: занят порт — движок и не нужен, и базу второй экземпляр не трогает
             string localKey = Accounts.RandomHex(16);
-            Api = new HttpApi(Engine, Accounts, port, log, Journal, localKey, dataDir) { LocalSetupCode = LocalSetupCode };
+            Api = new HttpApi(Engine, Accounts, port, log, Journal, localKey, dataDir) { LocalSetupCode = LocalSetupCode, FileLog = file };
             Api.Start();
             WriteLocalKey(dataDir, localKey, log);
             // Движок — до базы пользователей, как до 1.0.26: торренты и потоки
@@ -65,6 +80,20 @@ namespace TorrStreamTorrServer
                 }
                 catch (Exception e) { log("трафик: " + e.Message); }
             }, null, 10000, 10000);
+            // Память процесса — в журнал, когда заметно меняется (и раз в 10 минут):
+            // если службу закроет система, в previous.log видно, росла ли она перед этим
+            memoryTimer = new Timer(_ =>
+            {
+                try
+                {
+                    long rss = TorrEngine.ProcessRssMb(), now = Environment.TickCount;
+                    if (rss < 0) return;
+                    if (Math.Abs(rss - rssLogged) < 16 && unchecked(now - rssLoggedAt) < 600000) return;
+                    rssLogged = rss; rssLoggedAt = now;
+                    log("память: процесс " + rss + " МБ, куча .NET " + (GC.GetTotalMemory(false) >> 20) + " МБ, торрентов открыто " + Engine.OpenCount);
+                }
+                catch { }
+            }, null, 30000, 30000);
             log("служба готова" + (Api.Problems != null ? " с ошибками: " + Api.Problems : ""));
         }
 
@@ -111,9 +140,13 @@ namespace TorrStreamTorrServer
         public void Stop()
         {
             try { trafficTimer?.Dispose(); } catch { }
+            try { memoryTimer?.Dispose(); } catch { }
             if (Api != null) Api.Stop();
             if (Engine != null) Engine.StopAll();
             if (Accounts != null) Accounts.Close();
+            // Последней строкой: по ней следующий запуск поймёт, что этот не оборвался
+            Journal.Add(LogFile.StopLine);
+            if (FileLog != null) { FileLog.Add(LogFile.StopLine); FileLog.Close(); }
         }
     }
 }

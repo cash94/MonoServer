@@ -180,7 +180,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.36";
+        public const string ServiceVersion = "1.0.37";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 
@@ -293,7 +293,7 @@ namespace TorrStreamTorrServer
                 if (Interlocked.Increment(ref unhandled) <= 20) log("необработанная ошибка задачи: " + a.Exception?.GetBaseException());
                 a.SetObserved();
             };
-            AppDomain.CurrentDomain.UnhandledException += (s, a) => log("необработанная ошибка: " + a.ExceptionObject);
+            // Необработанную ошибку (падение процесса) пишет Host — в журнал и сразу в файл
             Directory.CreateDirectory(dataDir);
             Directory.CreateDirectory(cacheDir);
             // Каталоги торрентов от прошлого запуска — пустышки (данные были в памяти)
@@ -1413,10 +1413,57 @@ namespace TorrStreamTorrServer
             if (hashes > 0 || pex > 0) log("забыто от закрытых торрентов: недохэшированных кусков " + hashes + ", адресов PEX " + pex);
         }
 
-        static long ProcessRssMb()
+        internal static long ProcessRssMb()
         {
             try { using (var p = System.Diagnostics.Process.GetCurrentProcess()) return p.WorkingSet64 >> 20; }
             catch { return -1; }
+        }
+
+        /// <summary>Чем кончился прошлый запуск службы (LogFile.PreviousRun) — в /version «prev_run»</summary>
+        public string PreviousRun;
+
+        /// <summary>Сколько торрентов открыто в движке сейчас</summary>
+        public int OpenCount
+        {
+            get { lock (sync) return entries.Values.Count(x => x.Manager != null); }
+        }
+
+        /// <summary>
+        /// Системе не хватает памяти (Tizen: OnLowMemory) — закрыть торренты без
+        /// читателей сразу, не дожидаясь TorrentDisconnectTimeout, и отдать память ОС.
+        /// Иначе служба в фоне — первая, кого система закроет. hard — и
+        /// предзагруженные (KeepUntilMs): их ещё не смотрят, а смотрят — не тронем
+        /// </summary>
+        public void ReleaseMemory(bool hard)
+        {
+            var close = new List<TorrEntry>();
+            long now = Now();
+            lock (sync)
+                foreach (var e in entries.Values)
+                {
+                    if (e.Manager == null || e.Readers.Count > 0 || e.Preloading) continue;
+                    if (now < e.KeepUntilMs)
+                    {
+                        if (!hard) continue;
+                        e.KeepUntilMs = 0;
+                    }
+                    close.Add(e);
+                }
+            log("системе не хватает памяти" + (hard ? " (сильно)" : "") + ": процесс " + ProcessRssMb() + " МБ, закрываю торренты без читателей — " + close.Count);
+            Task.Run(async () =>
+            {
+                foreach (var e in close)
+                {
+                    try
+                    {
+                        // 0 — закрыть, если за это время к нему так никто и не пришёл
+                        if (await CloseAsync(e, 0).ConfigureAwait(false))
+                            lock (sync) if (!e.InDb && e.Manager == null && e.Activation == null) entries.Remove(e.Hash);
+                    }
+                    catch (Exception ex) { log(e.Hash + ": закрытие при нехватке памяти — " + ex.Message); }
+                }
+                try { TrimMemory(); } catch (Exception ex) { log("сборка мусора: " + ex.Message); }
+            });
         }
 
         // Раз в 2 с: торренты без читателей дольше TorrentDisconnectTimeout — закрыть.
@@ -2238,7 +2285,7 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>IPv4 устройства в локальной сети — по ним служба доступна с телефона и в TorrStream</summary>
-        static List<string> LanAddresses()
+        internal static List<string> LanAddresses()
         {
             var list = new List<string>();
             try
@@ -2286,6 +2333,7 @@ namespace TorrStreamTorrServer
                 if (StartError != null) w.Prop("error", StartError);
                 else if (settings == null) w.Prop("starting", true);
                 if (problem != null) w.Prop("problem", problem);
+                if (PreviousRun != null) w.Prop("prev_run", PreviousRun);
                 w.EndObj();
                 return;
             }
@@ -2344,6 +2392,7 @@ namespace TorrStreamTorrServer
                 .Prop("boosts", Volatile.Read(ref boostsTotal)).Prop("plain_retried", PlainTextRetry.Retried).EndObj();
             if (StartError != null) w.Prop("error", StartError);
             if (problem != null) w.Prop("problem", problem);
+            if (PreviousRun != null) w.Prop("prev_run", PreviousRun);
             w.EndObj();
         }
     }

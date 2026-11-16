@@ -40,6 +40,35 @@ namespace TorrStreamTorrServer
             base.OnTerminate();
         }
 
+        // Служба одна (multiple="false"): запуск при живом процессе — страница пакета,
+        // sdb execute, клиент — приходит сюда, а не новым процессом. Порт перестал
+        // отвечать — запуск это и должен чинить: проверить и открыть заново
+        protected override void OnAppControlReceived(AppControlReceivedEventArgs e)
+        {
+            base.OnAppControlReceived(e);
+            var api = host?.Api;
+            if (api == null) return;
+            // Подключение к себе ждёт до 2 с на адрес — не на главной нити
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { api.EnsureListening(); }
+                catch (Exception ex) { Tizen.Log.Error(LogTag, "EnsureListening: " + ex.Message); }
+            });
+        }
+
+        // Системе мало памяти: фоновую службу она закрывает первой — отдать, что можно
+        protected override void OnLowMemory(LowMemoryEventArgs e)
+        {
+            base.OnLowMemory(e);
+            var engine = host?.Engine;
+            if (engine == null) return;
+            if (e.LowMemoryStatus == LowMemoryStatus.SoftWarning || e.LowMemoryStatus == LowMemoryStatus.HardWarning)
+            {
+                try { engine.ReleaseMemory(e.LowMemoryStatus == LowMemoryStatus.HardWarning); }
+                catch (Exception ex) { Tizen.Log.Error(LogTag, "ReleaseMemory: " + ex.Message); }
+            }
+        }
+
         // Системное уведомление (org.tizen.alert-syspopup) — как у службы ffprobe;
         // только при ошибке, чтобы не мелькать на каждом включении телевизора
         static void ShowToast(string text)

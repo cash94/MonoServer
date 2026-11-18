@@ -66,9 +66,16 @@ namespace TorrStreamTorrServer
         public TorrDiag Diag = new TorrDiag();
         public bool Preloading;
         public long PreloadedBytes, PreloadSize;
-        // Окна читателей в кусках: пары [начало, конец] — их не вытесняем.
+        // Окна читателей в кусках: пары [начало, конец]. Protect — окно главного
+        // читателя и куски под позициями всех читателей: их не вытесняем никогда.
+        // ProtectSoft — окна остальных читателей: их вытесняем, когда кэш полон, а
+        // свободных кусков нет (иначе каждый читатель добавлял к памяти ещё окно).
         // Пересчитываются при каждом чтении, читаются без блокировки
         public volatile int[] Protect = new int[0];
+        public volatile int[] ProtectSoft = new int[0];
+        // Остановить идущую предзагрузку (нехватка памяти): номер, сравниваемый с
+        // номером при её запуске
+        public int PreloadStop;
         // Что качать (WindowRequester спрашивает на каждом такте) — считается
         // вместе с Protect, при смене читателей и переходе через кусок
         public volatile ReadWindow Window = ReadWindow.None;
@@ -172,6 +179,10 @@ namespace TorrStreamTorrServer
         // У ридеров предзагрузки — их участок, как SetReadahead(0) у TorrServer
         public long Limit = -1;
         public long Seq;
+        // Читатель предзагрузки: главным становится, только если других читателей
+        // нет. Иначе прогрев (следующая серия, начало файла при «Продолжить»)
+        // отбирал окно у плеера, а его окно держало память сверх «Размера кэша»
+        public bool Preload;
         public volatile bool Closed;
         // Для замера ожидания: когда открыт, ждал ли данных, отдал ли уже байт
         public long OpenedMs;
@@ -180,7 +191,7 @@ namespace TorrStreamTorrServer
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.37";
+        public const string ServiceVersion = "1.0.38";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 
@@ -955,17 +966,23 @@ namespace TorrStreamTorrServer
             var t = e.Manager?.Torrent;
             if (t == null) return null;
             var store = new PieceStore(t.PieceLength, t.PieceCount, t.Size, Settings.CacheSize);
-            store.IsProtected = p =>
+            store.Protection = p =>
             {
-                var r = e.Protect;
-                for (int i = 0; i + 1 < r.Length; i += 2)
-                    if (p >= r[i] && p <= r[i + 1]) return true;
-                return false;
+                if (InRanges(e.Protect, p)) return PieceStore.ProtectHard;
+                if (InRanges(e.ProtectSoft, p)) return PieceStore.ProtectSoft;
+                return PieceStore.ProtectNone;
             };
             var m = e.Manager;
             store.Evicted = p => ForgetPiece(m, p);
             e.Store = store;
             return store;
+        }
+
+        static bool InRanges(int[] r, int p)
+        {
+            for (int i = 0; i + 1 < r.Length; i += 2)
+                if (p >= r[i] && p <= r[i + 1]) return true;
+            return false;
         }
 
         // MemoryStorage: файл → хранилище его торрента (по каталогу торрента)
@@ -1300,6 +1317,7 @@ namespace TorrStreamTorrServer
                 // счёл бы метаданные готовыми и читал файлы старого менеджера
                 e.Files = e.Files.Select(f => new FileStat { Id = f.Id, Path = f.Path, Length = f.Length }).ToList();
                 e.Protect = new int[0];
+                e.ProtectSoft = new int[0];
                 e.Window = ReadWindow.None;
                 e.Preloading = false;
                 // WindowRequester держит закрытый TorrentManager (через свой выборщик
@@ -1432,16 +1450,27 @@ namespace TorrStreamTorrServer
         /// Системе не хватает памяти (Tizen: OnLowMemory) — закрыть торренты без
         /// читателей сразу, не дожидаясь TorrentDisconnectTimeout, и отдать память ОС.
         /// Иначе служба в фоне — первая, кого система закроет. hard — и
-        /// предзагруженные (KeepUntilMs): их ещё не смотрят, а смотрят — не тронем
+        /// предзагруженные (KeepUntilMs): их ещё не смотрят. Смотрят — не закрываем,
+        /// но останавливаем предзагрузку и ужимаем кэш (PieceStore.Shrink)
         /// </summary>
         public void ReleaseMemory(bool hard)
         {
             var close = new List<TorrEntry>();
+            var watched = new List<PieceStore>();
             long now = Now();
             lock (sync)
                 foreach (var e in entries.Values)
                 {
-                    if (e.Manager == null || e.Readers.Count > 0 || e.Preloading) continue;
+                    if (e.Manager == null) continue;
+                    if (e.Readers.Count > 0 || e.Preloading)
+                    {
+                        // Смотрят — не закрываем, но прогрев останавливаем, а кэш ужимаем:
+                        // раньше такой торрент не отдавал ничего, и систему спасало
+                        // только закрытие всей службы
+                        if (e.Preloading) e.PreloadStop++;
+                        if (e.Store != null) watched.Add(e.Store);
+                        continue;
+                    }
                     if (now < e.KeepUntilMs)
                     {
                         if (!hard) continue;
@@ -1449,7 +1478,13 @@ namespace TorrStreamTorrServer
                     }
                     close.Add(e);
                 }
-            log("системе не хватает памяти" + (hard ? " (сильно)" : "") + ": процесс " + ProcessRssMb() + " МБ, закрываю торренты без читателей — " + close.Count);
+            // Мягко — до «Размера кэша» (сверх него держат окна читателей); сильно —
+            // всё, кроме окна главного читателя и кусков под позициями
+            long shrunk = 0;
+            foreach (var store in watched)
+                try { shrunk += store.Shrink(hard ? 0 : store.Capacity); } catch (Exception ex) { log("кэш при нехватке памяти: " + ex.Message); }
+            log("системе не хватает памяти" + (hard ? " (сильно)" : "") + ": процесс " + ProcessRssMb() + " МБ, закрываю торренты без читателей — " + close.Count +
+                (watched.Count > 0 ? ", кэш смотрящихся −" + (shrunk >> 20) + " МБ" : ""));
             Task.Run(async () =>
             {
                 foreach (var e in close)
@@ -1667,9 +1702,9 @@ namespace TorrStreamTorrServer
         }
 
         /// <summary>measure — первый такой читатель задаёт замер старта (у предзагрузки — читатель начала, не конца)</summary>
-        public TorrReader OpenReader(TorrEntry e, FileStat f, long position, long limit = -1, bool measure = true)
+        public TorrReader OpenReader(TorrEntry e, FileStat f, long position, long limit = -1, bool measure = true, bool preload = false)
         {
-            var r = new TorrReader { Entry = e, Stat = f, Position = position, Limit = limit, Seq = Interlocked.Increment(ref readerSeq), OpenedMs = Now() };
+            var r = new TorrReader { Entry = e, Stat = f, Position = position, Limit = limit, Seq = Interlocked.Increment(ref readerSeq), OpenedMs = Now(), Preload = preload };
             if (measure && f.File != null)
                 lock (e.Diag)
                     if (e.Diag.FirstReadMs < 0)
@@ -1745,6 +1780,17 @@ namespace TorrStreamTorrServer
             return end;
         }
 
+        /// <summary>
+        /// Главный читатель: последний открытый, но не предзагрузка, пока есть
+        /// другие. Иначе прогрев следующей серии за 3 минуты до конца текущей
+        /// (TorrStream) забирал окно: плееру оставалось 2 куска, а в памяти —
+        /// окно плеера и окно прогрева разом
+        /// </summary>
+        static TorrReader PrimaryOf(List<TorrReader> live)
+        {
+            return live.OrderBy(r => r.Preload ? 1 : 0).ThenByDescending(r => r.Seq).FirstOrDefault();
+        }
+
         void UpdateProtect(TorrEntry e)
         {
             int pl = PieceLengthOf(e);
@@ -1752,20 +1798,34 @@ namespace TorrStreamTorrServer
             if (pl <= 0 || live.Count == 0)
             {
                 e.Protect = new int[0];
+                e.ProtectSoft = new int[0];
                 e.Window = ReadWindow.None;
                 return;
             }
             int ahead = AheadPieces(pl), behind = BehindPieces(pl);
-            var arr = new int[live.Count * 2];
-            for (int i = 0; i < live.Count; i++)
+            var primary = PrimaryOf(live);
+            // Главный — всё окно; остальные — кусок под позицией (его читают сейчас)
+            // жёстко и следующий мягко: качаются у них только эти 2 куска
+            // (WindowRequester), а прочее, что осталось от них в памяти, — обычный кэш
+            var hard = new List<int>(live.Count * 2 + 2);
+            var soft = new List<int>(live.Count * 2);
+            foreach (var r in live)
             {
-                int p = PieceOf(live[i], pl);
-                arr[i * 2] = p - behind;
-                arr[i * 2 + 1] = WindowEnd(live[i], pl, p + ahead);
+                int p = PieceOf(r, pl);
+                if (r == primary)
+                {
+                    hard.Add(p - behind);
+                    hard.Add(WindowEnd(r, pl, p + ahead));
+                    continue;
+                }
+                hard.Add(p);
+                hard.Add(p);
+                int next = WindowEnd(r, pl, p + 1);
+                if (next > p) { soft.Add(p + 1); soft.Add(next); }
             }
-            e.Protect = arr;
+            e.Protect = hard.ToArray();
+            e.ProtectSoft = soft.ToArray();
 
-            var primary = live.OrderByDescending(r => r.Seq).First();
             // Начало и конец файла главного читателя — служебный кэш, отдельно от кэша (PieceStore.SetPinned)
             if (e.Store != null && !ReferenceEquals(e.PinnedFile, primary.Stat.File))
             {
@@ -1921,15 +1981,23 @@ namespace TorrStreamTorrServer
             long total = withTail ? headEnd + (f.Length - tailStart) : headEnd;
 
             // Конец — открываем первым: главный читатель (окно вперёд) — последний
-            // открытый, им должно быть начало; конец идёт как второй читатель
-            TorrReader rt = withTail ? OpenReader(e, f, tailStart, measure: false) : null;
+            // открытый, им должно быть начало; конец идёт как второй читатель.
+            // Оба — читатели предзагрузки: при плеере главным остаётся он (PrimaryOf)
+            TorrReader rt = withTail ? OpenReader(e, f, tailStart, measure: false, preload: true) : null;
             // Окно начала — только до своего участка: иначе оно качало обычные
             // 60 МБ вперёд, забивало кэш и канал, пока конец файла ждал
-            var rh = OpenReader(e, f, 0, headEnd);
-            lock (sync) { e.Preloading = true; e.PreloadSize = total; e.PreloadedBytes = 0; }
+            var rh = OpenReader(e, f, 0, headEnd, preload: true);
+            int stopGen;
+            lock (sync) { e.Preloading = true; e.PreloadSize = total; e.PreloadedBytes = 0; stopGen = e.PreloadStop; }
             long headDone = 0, tailDone = 0;
             bool failed = false;
-            Func<bool> stop = () => failed || aborted();
+            string yielded = null;
+            Func<bool> stop = () =>
+            {
+                if (failed) return true;
+                if (yielded == null) yielded = PreloadYield(e, f, stopGen);
+                return yielded != null || aborted();
+            };
             Action report = () => { lock (sync) e.PreloadedBytes = Interlocked.Read(ref headDone) + Interlocked.Read(ref tailDone); };
             try
             {
@@ -1938,7 +2006,7 @@ namespace TorrStreamTorrServer
                     tailTask = Task.Run(() =>
                     {
                         var tb = new byte[64 * 1024];
-                        while (rt.Position < f.Length)
+                        while (rt.Position < f.Length && !stop())
                         {
                             int n = Read(rt, tb, 0, (int)Math.Min(tb.Length, f.Length - rt.Position), stop);
                             if (n <= 0) { failed = true; return; }
@@ -1947,7 +2015,7 @@ namespace TorrStreamTorrServer
                         }
                     });
                 var buf = new byte[64 * 1024];
-                while (rh.Position < headEnd)
+                while (rh.Position < headEnd && !stop())
                 {
                     int n = Read(rh, buf, 0, (int)Math.Min(buf.Length, headEnd - rh.Position), stop);
                     if (n <= 0) { failed = true; break; }
@@ -1959,6 +2027,11 @@ namespace TorrStreamTorrServer
                 CloseReader(rh);
                 rh = null;
                 tailTask.Wait();
+                if (yielded != null)
+                {
+                    log(e.Hash + ": предзагрузка файла " + f.Id + " остановлена — " + yielded);
+                    return true;
+                }
                 return !failed;
             }
             finally
@@ -1971,6 +2044,30 @@ namespace TorrStreamTorrServer
                 if (rh != null) CloseReader(rh);
                 if (rt != null) CloseReader(rt);
             }
+        }
+
+        // Плеер этого же файла открыт дольше этого — предзагрузка ему больше не нужна.
+        // Короткие запросы (разбор заголовка службой дорожек TorrStream, Range к
+        // индексу MKV) живут доли секунды и её не останавливают
+        const long PreloadYieldMs = 10000;
+
+        /// <summary>
+        /// Причина остановить идущую предзагрузку или null. TorrStream начинает
+        /// играть, не дождавшись её конца (32 МБ или «Смотреть сейчас»), и при
+        /// «Продолжить» она грела начало файла, пока плеер качал середину, — два
+        /// окна в памяти разом. Lampa ждёт её конца, и ей это не мешает
+        /// </summary>
+        string PreloadYield(TorrEntry e, FileStat f, int stopGen)
+        {
+            long now = Now();
+            lock (sync)
+            {
+                if (e.PreloadStop != stopGen) return "системе не хватает памяти";
+                foreach (var r in e.Readers)
+                    if (!r.Preload && !r.Closed && ReferenceEquals(r.Stat.File, f.File) && now - r.OpenedMs >= PreloadYieldMs)
+                        return "файл уже смотрят";
+            }
+            return null;
         }
 
         // ==================== состояние для API ====================
@@ -2113,7 +2210,7 @@ namespace TorrStreamTorrServer
                     ahead = AheadPieces(pl);
                     behind = BehindPieces(pl);
                     var live = e.Readers.Where(x => !x.Closed && x.Stat.File != null).ToList();
-                    var primary = live.OrderByDescending(r => r.Seq).FirstOrDefault();
+                    var primary = PrimaryOf(live);
                     foreach (var r in live)
                     {
                         int p = PieceOf(r, pl);

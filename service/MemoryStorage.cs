@@ -5,9 +5,13 @@
 //
 // Места не хватает — вытесняем проверенный кусок, который дольше всех не
 // трогали и который не нужен ни одному читателю (окно вокруг позиции, см.
-// TorrEngine.IsProtected). Вытеснили — об этом узнаёт TorrEngine и снимает бит
-// куска в bitfield MonoTorrent: иначе тот считал бы кусок скачанным и не стал бы
-// качать его снова при перемотке назад.
+// TorrEngine.EnsureStore). Таких нет — кусок из окна второстепенного читателя
+// (мягкая защита): иначе каждый открытый читатель (предзагрузка рядом с
+// плеером) добавлял к памяти своё окно, и на телевизоре с 1,5 ГБ службу
+// закрывала система. Сверх лимита — только окно главного читателя, куски под
+// позициями читателей и недокачанное за последние 30 с. Вытеснили — об этом
+// узнаёт TorrEngine и снимает бит куска в bitfield MonoTorrent: иначе тот
+// считал бы кусок скачанным и не стал бы качать его снова при перемотке назад.
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -121,8 +125,16 @@ namespace TorrStreamTorrServer
         long capacity;
         bool disposed;
 
-        /// <summary>Кусок нужен читателю — не вытеснять (TorrEngine)</summary>
-        public Func<int, bool> IsProtected = _ => false;
+        public const int ProtectNone = 0, ProtectSoft = 1, ProtectHard = 2;
+        /// <summary>
+        /// Нужен ли кусок читателям (TorrEngine): ProtectHard — не вытеснять,
+        /// ProtectSoft — только когда вытеснить больше нечего
+        /// </summary>
+        public Func<int, int> Protection = _ => ProtectNone;
+        // Сколько свободных буферов держать под следующие куски. Остальные — сборщику
+        // мусора: после пика (несколько читателей разом) их набиралось на десятки
+        // мегабайт, и процесс держал их до закрытия торрента
+        const int SpareKeep = 2;
         /// <summary>Кусок вытеснен — снять бит в MonoTorrent (зовётся вне блокировки)</summary>
         public Action<int> Evicted = _ => { };
 
@@ -425,20 +437,52 @@ namespace TorrStreamTorrServer
         byte[] Allocate(int piece, ref List<int> evicted)
         {
             // Закреплённый кусок места в кэше не занимает — и ничего не вытесняет
-            while (!pinned.Contains(piece) && (long)(UnpinnedCount() + 1) * PieceLength > capacity)
+            if (!pinned.Contains(piece))
+                EvictDownTo(capacity - PieceLength, piece, ref evicted);
+            byte[] data = spare.Count > 0 ? spare.Pop() : new byte[PieceLength];
+            while (spare.Count > SpareKeep) spare.Pop();
+            return data;
+        }
+
+        // Вытеснять, пока незакреплённые куски занимают больше target байт: сначала
+        // никому не нужные, затем окна второстепенных читателей. Под sync
+        void EvictDownTo(long target, int forPiece, ref List<int> evicted)
+        {
+            while ((long)UnpinnedCount() * PieceLength > target)
             {
-                int victim = PickVictim(piece);
+                int victim = PickVictim(forPiece, ProtectNone);
+                if (victim < 0) victim = PickVictim(forPiece, ProtectSoft);
                 if (victim < 0) break;
                 var data = slots[victim].Data;
                 slots.Remove(victim);
-                if (data.Length == PieceLength) spare.Push(data);
+                if (data.Length == PieceLength && spare.Count < SpareKeep) spare.Push(data);
                 (evicted ?? (evicted = new List<int>())).Add(victim);
             }
-            if (spare.Count > 0) return spare.Pop();
-            return new byte[PieceLength];
         }
 
-        int PickVictim(int forPiece)
+        /// <summary>
+        /// Отдать память сейчас (нехватка памяти у системы): вытеснить всё, что не
+        /// под жёсткой защитой, сверх target байт (0 — всё такое), и свободные буферы.
+        /// Байт освобождено
+        /// </summary>
+        public long Shrink(long target)
+        {
+            List<int> evicted = null;
+            long freed;
+            lock (sync)
+            {
+                if (disposed) return 0;
+                long before = (long)(slots.Count + spare.Count) * PieceLength;
+                EvictDownTo(Math.Max(0, target), -1, ref evicted);
+                spare.Clear();
+                freed = before - (long)slots.Count * PieceLength;
+            }
+            if (evicted != null)
+                foreach (int p in evicted) Evicted(p);
+            return freed;
+        }
+
+        int PickVictim(int forPiece, int maxProtection)
         {
             long now = Now();
             int best = -1;
@@ -449,7 +493,7 @@ namespace TorrStreamTorrServer
                 if (kv.Key == forPiece || pinned.Contains(kv.Key)) continue;
                 var s = kv.Value;
                 if (!s.Verified && now - s.Touched < StaleUnverifiedMs) continue;
-                if (IsProtected(kv.Key)) continue;
+                if (Protection(kv.Key) > maxProtection) continue;
                 // Проверенные — в первую очередь, среди них — самый давний
                 if (best < 0 || (s.Verified && !bestVerified) || (s.Verified == bestVerified && s.Touched < bestTouched))
                 {

@@ -110,11 +110,51 @@ supervise() {
     rm -f "$SUP_PID"
 }
 
-is_running() { alive "$(pid_of "$SUP_PID")" || alive "$(pid_of "$CHILD_PID")"; }
+# Процессы ищутся по /proc, а не только по PID-файлам: файлы в /var/run пропадают,
+# а служба, запущенная прежним пакетом (другой сборщик, свой PID-файл), осталась бы
+# жить и держать порт. Программа MonoServer — наша, если это файл пакета (и
+# подменённый обновлением — «(deleted)») или её аргумент — наш каталог данных.
+# Другие экземпляры MonoServer (свои данные, другой путь) не трогаются.
+server_pids() {
+    real="$(readlink -f "$BIN" 2>/dev/null)"
+    for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        [ "$pid" = "$$" ] && continue
+        comm=""
+        read -r comm < "$d/comm" 2>/dev/null || continue
+        [ "$comm" = "MonoServer" ] || continue
+        exe="$(readlink "$d/exe" 2>/dev/null)"
+        exe="${exe% (deleted)}"
+        args="$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null)"
+        argv0="$(echo "$args" | sed -n 1p)"
+        if [ -n "$exe" ] && { [ "$exe" = "$BIN" ] || [ "$exe" = "$real" ]; }; then echo "$pid"; continue; fi
+        [ "$argv0" = "$BIN" ] && { echo "$pid"; continue; }
+        echo "$args" | sed -n '2,$p' | grep -qxF "$DATA" && echo "$pid"
+    done
+}
+
+# Сторожа этого скрипта (sh … monoserverctl.sh _supervise)
+supervisor_pids() {
+    for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        [ "$pid" = "$$" ] && continue
+        comm=""
+        read -r comm < "$d/comm" 2>/dev/null || continue
+        case "$comm" in sh|ash|bash|dash|busybox) ;; *) continue ;; esac
+        c="$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)"
+        case "$c" in *"monoserverctl.sh _supervise"*) echo "$pid" ;; esac
+    done
+}
+
+is_running() { [ -n "$(server_pids)" ]; }
 
 cmd_start() {
     prepare || { say "Не создать каталог данных $DATA"; return 1; }
-    if is_running; then say "MonoServer уже запущен."; return 0; fi
+    if is_running; then
+        [ -n "$(supervisor_pids)" ] && { say "MonoServer уже запущен."; return 0; }
+        # Работает без сторожа (запущен прежним пакетом или сторож убит) — перезапустить под сторожем
+        cmd_stop > /dev/null
+    fi
     [ -x "$BIN" ] || { say "Нет программы $BIN — переустановите приложение или: $SELF update"; return 1; }
     rm -f "$STOP_FLAG" "$CHILD_PID"
     if command -v setsid >/dev/null 2>&1; then
@@ -136,31 +176,35 @@ cmd_start() {
 cmd_stop() {
     mkdir -p "$RUN_DIR" 2>/dev/null
     touch "$STOP_FLAG" 2>/dev/null
-    sup="$(pid_of "$SUP_PID")"
-    child="$(pid_of "$CHILD_PID")"
-    # Сначала сторож — чтобы не перезапустил
-    alive "$sup" && kill "$sup" 2>/dev/null
-    if alive "$child"; then
+    # Сначала сторожа — чтобы не перезапустили
+    for p in $(pid_of "$SUP_PID") $(supervisor_pids); do
+        alive "$p" && kill "$p" 2>/dev/null
+    done
+    pids="$(server_pids)"
+    if [ -n "$pids" ]; then
         # SIGTERM: программа закрывает торренты и сохраняет кэш DHT (до 15 с)
-        kill -TERM "$child" 2>/dev/null
+        kill -TERM $pids 2>/dev/null
         i=0
-        while alive "$child" && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
-        alive "$child" && kill -9 "$child" 2>/dev/null
+        while [ -n "$(server_pids)" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
+        pids="$(server_pids)"
+        [ -n "$pids" ] && kill -9 $pids 2>/dev/null
         logline "MonoServer остановлен"
     fi
-    rm -f "$SUP_PID" "$CHILD_PID" "$STOP_FLAG"
+    rm -f "$SUP_PID" "$CHILD_PID" "$STOP_FLAG" "$DATA/.monoserver-adm.pid"
     say "MonoServer остановлен."
     return 0
 }
 
 cmd_status() {
-    if is_running; then
+    pids="$(server_pids | tr '\n' ' ' | sed 's/ $//')"
+    if [ -n "$pids" ]; then
         v="$(echo_req)"
         if [ -n "$v" ]; then
-            say "MonoServer работает: $v (pid $(pid_of "$CHILD_PID"))"
+            say "MonoServer работает: $v (pid $pids)"
         else
-            say "MonoServer запущен (pid $(pid_of "$CHILD_PID")), но на порту $(port) пока не отвечает — журнал: $SELF log"
+            say "MonoServer запущен (pid $pids), но на порту $(port) пока не отвечает — журнал: $SELF log"
         fi
+        [ -z "$(supervisor_pids)" ] && say "  без сторожа (после падения сам не поднимется) — перезапустите: $SELF restart"
         say "  в домашней сети: http://$(lan_ip):$(port)/"
         say "  данные: $DATA"
         return 0

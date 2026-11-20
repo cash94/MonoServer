@@ -19,6 +19,10 @@ on:
         description: 'Релиз (тег v1.0.N); пусто — последний'
         required: false
         default: ''
+      revision:
+        description: 'Ревизия пакета: 1 → 1.0.N.r01 (выше прежней, если пакет пересобран)'
+        required: false
+        default: '1'
       attach:
         description: 'Приложить пакеты к этому релизу'
         type: boolean
@@ -46,9 +50,11 @@ jobs:
           ls -la dist
 
       - name: Сборка
+        env:
+          REVISION: ${{ inputs.revision }}
         run: |
           V="${TAG#v}"
-          python3 tools/build-asustor.py --version "${V%%-*}"
+          python3 tools/build-asustor.py --version "${V%%-*}" --revision "${REVISION:-1}"
           ls -la dist/MonoServer-ASUSTOR-*
 
       - name: Приложить к релизу

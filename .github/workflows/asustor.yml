@@ -62,5 +62,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: MonoServer-ASUSTOR
-          path: dist/MonoServer-ASUSTOR-*.apk
+          path: |
+            dist/MonoServer-ASUSTOR-x64.apk
+            dist/MonoServer-ASUSTOR-arm64.apk
           retention-days: 14

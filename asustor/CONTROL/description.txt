@@ -1,0 +1,1 @@
+MonoServer — TorrServer на C# (MonoTorrent) с API TorrServer MatriX: смотреть торренты без скачивания в TorrStream, Lampa и других клиентах TorrServer. Веб-интерфейс и API — на порту 8099. Данные и настройки — в /volume1/MonoServer (при удалении приложения не стираются).

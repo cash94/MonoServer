@@ -1,0 +1,34 @@
+{
+    "general": {
+        "package": "monoserver",
+        "name": "MonoServer",
+        "version": "@VERSION@",
+        "depends": [],
+        "conflicts": [],
+        "developer": "cash94",
+        "maintainer": "cash94",
+        "email": "",
+        "website": "https://github.com/cash94/MonoServer",
+        "architecture": "@ARCH@",
+        "firmware": "4.0.0"
+    },
+    "adm-desktop": {
+        "app": {
+            "type": "custom",
+            "protocol": "http",
+            "port": 8099,
+            "url": "/"
+        },
+        "privilege": {
+            "accessible": "users",
+            "customizable": true
+        }
+    },
+    "register": {
+        "boot-priority": {
+            "start-order": 90,
+            "stop-order": 10
+        },
+        "port": [8099]
+    }
+}

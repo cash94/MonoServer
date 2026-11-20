@@ -1,0 +1,66 @@
+# Пакеты ASUSTOR без сборки .NET: архивы Linux последнего релиза (или указанного
+# тега) → tools/build-asustor.py → артефакт MonoServer-ASUSTOR. Сам запускается при
+# изменениях пакета в main (asustor/, tools/build-asustor.py) — проверка, что
+# собирается. Вручную (Actions → asustor → Run workflow) с attach — ещё и
+# приложить .apk к этому релизу (например, к вышедшему до появления пакета).
+# Новые релизы получают пакеты сами — шаг ASUSTOR в build.yml.
+name: asustor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'asustor/**'
+      - 'tools/build-asustor.py'
+      - '.github/workflows/asustor.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Релиз (тег v1.0.N); пусто — последний'
+        required: false
+        default: ''
+      attach:
+        description: 'Приложить пакеты к этому релизу'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  asustor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Архивы Linux из релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [ -n "$TAG" ] || TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          mkdir -p dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern 'MonoServer-linux-x64.tar.gz' --pattern 'MonoServer-linux-arm64.tar.gz'
+          ls -la dist
+
+      - name: Сборка
+        run: |
+          V="${TAG#v}"
+          python3 tools/build-asustor.py --version "${V%%-*}"
+          ls -la dist/MonoServer-ASUSTOR-*
+
+      - name: Приложить к релизу
+        if: ${{ inputs.attach }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/MonoServer-ASUSTOR-x64.apk dist/MonoServer-ASUSTOR-arm64.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MonoServer-ASUSTOR
+          path: dist/MonoServer-ASUSTOR-*.apk
+          retention-days: 14

@@ -109,6 +109,15 @@ ARM-сборки (linux-musl-arm) в релизах нет. systemd на эти�
 или вручную, как выше (на OpenWRT — строкой в `/etc/rc.local`, на Alpine —
 службой OpenRC).
 
+### NAS ASUSTOR
+
+`MonoServer-ASUSTOR-x64.apk` (Intel/AMD, например AS5304T) или `-arm64.apk` из
+[релизов](../../releases/latest) — пакет App Central (не Android): **App Central →
+Управление → Установка вручную**. Служба на порту **8099**, ярлык на рабочем столе
+ADM, запуск вместе с NAS, данные — `/volume1/MonoServer`. Управление из SSH —
+`/usr/local/AppCentral/monoserver/bin/monoserverctl.sh status|log|code|update`.
+Подробнее — [asustor/README.md](asustor/README.md).
+
 ## Windows
 
 `MonoServer-windows-x64.zip` (или `-arm64`) из [релизов](../../releases/latest) —
@@ -473,8 +482,9 @@ python tools/build.py [--version 1.0.38] [--linux]
 `dist/`. Проверка без телевизора: `cd service/pc && dotnet run -c Release -- 18090`.
 
 Тег `v*` → workflow `build.yml`: версия из тега → `tools/build.py --linux` →
-релиз с `MonoServer-Tizen.wgt`, `MonoServer-linux-*.tar.gz`, `MonoServer-windows-*.zip`
-и `MonoServer-Android-*.apk`.
+релиз с `MonoServer-Tizen.wgt`, `MonoServer-linux-*.tar.gz`, `MonoServer-windows-*.zip`,
+`MonoServer-Android-*.apk` и пакеты ASUSTOR `MonoServer-ASUSTOR-*.apk`
+(`tools/build-asustor.py` из архивов Linux — см. [asustor/README.md](asustor/README.md#сборка)).
 
 APK для Android (нужны .NET SDK 8+, JDK 11+ и Android SDK — `ANDROID_HOME` или
 `android/local.properties`):

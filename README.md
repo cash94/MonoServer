@@ -43,7 +43,10 @@ TorrServer → «Использовать TorrServer, установленный
 ## Linux
 
 Одной командой — служба systemd с автозапуском (спросит порт, Enter — 8090,
-проверит, свободен ли; программу для x64 или arm64 скачает из релиза):
+проверит, свободен ли; программу для x64 или arm64 скачает из релиза).
+Программа ставится в `/opt/monoserver`, служба — в
+`/etc/systemd/system/monoserver.service` (понадобится sudo), работает от имени
+того, кто ставит:
 
 ```bash
 mkdir -p ~/monoserver && cd ~/monoserver && curl -fsSL https://raw.githubusercontent.com/cash94/MonoServer/main/linux/monoserver.sh -o monoserver.sh && bash monoserver.sh install
@@ -55,8 +58,18 @@ mkdir -p ~/monoserver && cd ~/monoserver && curl -fsSL https://raw.githubusercon
 curl -fsSL https://raw.githubusercontent.com/cash94/MonoServer/main/linux/monoserver.sh -o /tmp/monoserver.sh && bash /tmp/monoserver.sh update
 ```
 
-Для службы, поставленной с `--system`, — `bash /tmp/monoserver.sh update --system`.
-Служба, поставленная до 1.0.18 (`torrserver-tizen`, скрипт `torrserver.sh`),
+Смотреть и управлять — как любой службой:
+
+```bash
+systemctl status monoserver
+sudo systemctl restart monoserver
+journalctl -u monoserver -f
+```
+
+Служба, поставленная прежними версиями скрипта как пользовательская
+(`~/.local/lib/monoserver`, `systemctl --user`), командой `update` только
+обновляется; `install` переносит её в `/opt/monoserver` — с тем же портом и
+данными. Служба, поставленная до 1.0.18 (`torrserver-tizen`, скрипт `torrserver.sh`),
 этой же командой переносится в `monoserver` — с её портом и данными; прежняя
 команда с `torrserver.sh` тоже работает (он скачивает и запускает `monoserver.sh`).
 
@@ -73,9 +86,13 @@ curl -fsSL https://raw.githubusercontent.com/cash94/MonoServer/main/linux/monose
 | `./monoserver.sh run` | запустить в терминале, без службы |
 
 `-p ПОРТ` — без вопроса, `-d КАТАЛОГ` — данные (по умолчанию
-`~/.local/share/monoserver`), `--system` — служба для всей системы через
-sudo вместо пользовательской. Пользовательская служба стартует при загрузке
-благодаря `loginctl enable-linger` (скрипт включает его сам).
+`~/.local/share/monoserver` того, кто ставит), `--user` — пользовательская
+служба без sudo (`~/.local/lib/monoserver`, `systemctl --user`) вместо
+системной; она стартует при загрузке благодаря `loginctl enable-linger`
+(скрипт включает его сам).
+
+Ставить `libicu` не нужно: с 1.0.40 все Linux-сборки работают без ICU (как
+сборки для musl), так что на голом Debian/Ubuntu хватает самого архива.
 
 Вручную, без скрипта:
 

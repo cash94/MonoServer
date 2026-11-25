@@ -16,7 +16,8 @@ Studio) своим сертификатом Samsung — он привязан к
 --linux — ещё MonoServer-linux-x64.tar.gz и MonoServer-linux-arm64.tar.gz:
 та же служба консольной программой (service/pc), с .NET внутри; и
 MonoServer-linux-musl-x64.tar.gz, MonoServer-linux-musl-arm64.tar.gz — для
-систем на musl (Alpine, OpenWRT), без ICU (InvariantGlobalization).
+систем на musl (Alpine, OpenWRT). Все Linux-сборки — без ICU
+(InvariantGlobalization): libicu ставить не нужно.
 
 Результат — <имя>_<версия> и копия с постоянным именем. Нужен .NET SDK 8+
 (Tizen.NET.Sdk и MonoTorrent dotnet скачает сам).
@@ -113,12 +114,13 @@ def build_linux(version, out, work):
     """Служба консольной программой с .NET внутри — архив с правом на запуск"""
     for rid in ('linux-x64', 'linux-arm64', 'linux-musl-x64', 'linux-musl-arm64'):
         pub = os.path.join(work, 'linux-' + rid)
-        extra = []
-        if '-musl-' in rid:
-            # На OpenWRT ICU нет, на Alpine — отдельный пакет: культура только
-            # инвариантная. PredefinedCulturesOnly=false — LiteDB создаёт культуру
-            # по сохранённому в базе LCID, в инвариантном режиме это иначе исключение
-            extra = ['-p:InvariantGlobalization=true', '-p:PredefinedCulturesOnly=false']
+        # Без ICU — все Linux-сборки: на OpenWRT её нет, на Alpine и голом
+        # Debian/Ubuntu (libicu) — отдельный пакет, без которого программа не
+        # стартовала. Культура только инвариантная — MonoServer культуры не нужны;
+        # ключи LiteDB в Ordinal (AccountsLiteDb.EnsureOrdinal), от ICU не зависят.
+        # PredefinedCulturesOnly=false — LiteDB создаёт культуру по сохранённому в
+        # базе LCID, в инвариантном режиме это иначе исключение
+        extra = ['-p:InvariantGlobalization=true', '-p:PredefinedCulturesOnly=false']
         subprocess.check_call(['dotnet', 'publish', os.path.join(SERVICE, 'pc'), '-c', 'Release', '-r', rid,
                                '--self-contained', 'true', '-p:PublishSingleFile=true',
                                '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=None',

@@ -10,6 +10,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using LiteDB;
+using LiteDB.Engine;
 
 namespace TorrStreamTorrServer
 {
@@ -40,9 +41,28 @@ namespace TorrStreamTorrServer
             }
         }
 
+        // Порядок ключей в индексах — побайтный (Ordinal), а не по культуре. По
+        // умолчанию LiteDB берёт «[текущая культура]/IgnoreCase», и сравнение идёт
+        // через ICU — а Linux-сборки (с 1.0.40) и сборки для musl/Tizen работают без
+        // ICU, где то же сравнение даёт другой порядок: база, созданная с ICU,
+        // переставала находить свои же ключи (FindById по раздачам — null). Ordinal
+        // одинаков везде. Новая база создаётся сразу с ним, старая перестраивается
+        // один раз при открытии (EnsureOrdinal).
+        static readonly Collation OrdinalCollation = new Collation(CultureInfo.InvariantCulture.LCID, CompareOptions.Ordinal);
+
+        // Collation — только для нового файла: у существующего с другой LiteDB
+        // бросает «Datafile collation … is different», и Open() отложил бы базу
+        // целиком в .bad — со всеми пользователями
+        ConnectionString Conn()
+        {
+            var cs = new ConnectionString { Filename = path, Connection = ConnectionType.Direct };
+            if (!File.Exists(path)) cs.Collation = OrdinalCollation;
+            return cs;
+        }
+
         LiteDatabase Open()
         {
-            try { return Small(new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct })); }
+            try { return EnsureOrdinal(Small(new LiteDatabase(Conn()))); }
             catch (IOException e)
             {
                 // Занята (другой экземпляр службы) или нет доступа — не трогаем
@@ -65,7 +85,23 @@ namespace TorrStreamTorrServer
             string journal = Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path) + "-log.db");
             if (File.Exists(journal)) File.Move(journal, bad + "-log");
             log(Name + " отложена в " + Path.GetFileName(bad) + ", начинаю новую");
-            return Small(new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct }));
+            return Small(new LiteDatabase(Conn()));
+        }
+
+        // Перестройка читает документы подряд, мимо индексов, и строит индексы
+        // заново уже с Ordinal — поэтому годится и для базы, чей порядок в этом
+        // режиме уже «сломан». Не вышло — работаем с базой как есть, как раньше
+        LiteDatabase EnsureOrdinal(LiteDatabase d)
+        {
+            try
+            {
+                var was = d.Collation;
+                if (was.SortOptions == CompareOptions.Ordinal) return d;
+                d.Rebuild(new RebuildOptions { Collation = OrdinalCollation });
+                log(Name + ": порядок ключей " + was + " → Ordinal (база перестроена)");
+            }
+            catch (Exception e) { log(Name + ": перестроить на Ordinal не вышло — " + e.Message); }
+            return d;
         }
 
         // Журнал (monoserver-log.db) переносится в базу каждые 50 страниц, а не 1000:

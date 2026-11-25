@@ -11,18 +11,23 @@
 #   ./monoserver.sh             — то же, что install
 #
 # Параметры: -p ПОРТ (без вопроса), -y (порт по умолчанию без вопроса),
-# -d КАТАЛОГ (данные; по умолчанию ~/.local/share/monoserver),
-# --system (служба для всей системы через sudo, а не пользовательская).
+# -d КАТАЛОГ (данные; по умолчанию ~/.local/share/monoserver того, кто ставит),
+# --user (пользовательская служба в ~/.local/lib без sudo, как до 1.0.40).
+#
+# Служба — системная: программа в /opt/monoserver, служба
+# /etc/systemd/system/monoserver.service (нужен sudo), работает от имени того,
+# кто ставит. Смотреть привычно: systemctl status monoserver,
+# journalctl -u monoserver. Пользовательская служба прежних версий при install
+# переносится в системную — с её портом и данными.
 #
 # Порт проверяется: занят — скрипт скажет кем и спросит другой. Программа
 # MonoServer ищется рядом со скриптом (так лежат файлы в архиве
 # MonoServer-linux-*.tar.gz); нет её — скрипт предложит скачать последний
 # релиз под архитектуру (x64 или arm64; на musl — Alpine, OpenWRT — сборку
-# linux-musl). Служба запускается при загрузке
-# компьютера; программа и скрипт для неё копируются в постоянный каталог, так
-# что архив после установки можно удалить. Служба прежнего имени
-# torrserver-tizen (до 1.0.18) при install/update переносится сюда — с её
-# портом и данными.
+# linux-musl). Служба запускается при загрузке компьютера; программа и скрипт
+# для неё копируются в /opt/monoserver, так что архив после установки можно
+# удалить. Служба прежнего имени torrserver-tizen (до 1.0.18) при
+# install/update переносится сюда — с её портом и данными.
 set -u
 
 NAME="monoserver"
@@ -34,10 +39,10 @@ SRC_BIN="$HERE/MonoServer"
 DATA=""
 PORT=""
 ASK=1
-SYSTEM=0
+SYSTEM=""          # 1 — системная служба, 0 — пользовательская; пусто — решим ниже
 CMD="install"
 
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 die() { echo "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
@@ -47,6 +52,7 @@ while [ $# -gt 0 ]; do
         -d|--data) DATA="${2:-}"; shift 2 ;;
         -y|--yes) ASK=0; shift ;;
         --system) SYSTEM=1; shift ;;
+        --user) SYSTEM=0; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Неизвестный параметр: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -54,22 +60,46 @@ done
 
 # ---------- где что лежит ----------
 
+# Кто будет хозяином службы и данных: под sudo — тот, кто его позвал
+RUN_USER="${SUDO_USER:-$(id -un)}"
+RUN_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
+[ -n "$RUN_HOME" ] || RUN_HOME="$HOME"
+# Пользовательская служба (до 1.0.40 — по умолчанию): её место у RUN_USER
+USER_INSTALL_DIR="$RUN_HOME/.local/lib/$NAME"
+if [ "$RUN_USER" = "$(id -un)" ]; then
+    USER_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$NAME.service"
+else
+    USER_UNIT_PATH="$RUN_HOME/.config/systemd/user/$NAME.service"
+fi
+SYSTEM_UNIT_PATH="/etc/systemd/system/$NAME.service"
+
+# Режим не задан: install/run — системная служба; остальные команды — та,
+# что стоит (системная, иначе пользовательская прежних версий)
+if [ -z "$SYSTEM" ]; then
+    SYSTEM=1
+    case "$CMD" in
+        update|uninstall|status|log|code)
+            [ ! -f "$SYSTEM_UNIT_PATH" ] && [ -f "$USER_UNIT_PATH" ] && SYSTEM=0 ;;
+    esac
+fi
+
 if [ "$SYSTEM" = 1 ]; then
-    SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
-    RUN_USER="${SUDO_USER:-$(id -un)}"
-    RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+    SUDO=""
+    if [ "$(id -u)" -ne 0 ]; then
+        command -v sudo >/dev/null 2>&1 || die "Нужны права root: запустите от root или поставьте sudo (либо пользовательская служба: $0 $CMD --user)."
+        SUDO="sudo"
+    fi
     INSTALL_DIR="/opt/$NAME"
-    UNIT_PATH="/etc/systemd/system/$NAME.service"
+    UNIT_PATH="$SYSTEM_UNIT_PATH"
     OLD_INSTALL_DIR="/opt/$OLD_NAME"
     OLD_UNIT_PATH="/etc/systemd/system/$OLD_NAME.service"
     SCTL() { $SUDO systemctl "$@"; }
     JCTL() { $SUDO journalctl -u "$NAME" "$@"; }
 else
     SUDO=""
-    RUN_USER="$(id -un)"
-    RUN_HOME="$HOME"
-    INSTALL_DIR="$HOME/.local/lib/$NAME"
-    UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$NAME.service"
+    [ "$RUN_USER" = "$(id -un)" ] || die "Пользовательскую службу ставят без sudo: $0 $CMD --user"
+    INSTALL_DIR="$USER_INSTALL_DIR"
+    UNIT_PATH="$USER_UNIT_PATH"
     OLD_INSTALL_DIR="$HOME/.local/lib/$OLD_NAME"
     OLD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$OLD_NAME.service"
     SCTL() { systemctl --user "$@"; }
@@ -80,6 +110,19 @@ DATA_DEFAULT=0
 [ -z "$DATA" ] && DATA="${TS_DATA:-$RUN_HOME/.local/share/$NAME}"
 OLD_DATA="$RUN_HOME/.local/share/$OLD_NAME"
 CONF="$INSTALL_DIR/port"
+
+# .NET без ICU (libicu). С 1.0.40 Linux-сборки и так собраны без неё
+# (InvariantGlobalization) — переменные им ничего не меняют. Они для релизов
+# до 1.0.40 на системе, где libicu нет (голый Debian/Ubuntu): без них
+# программа там не стартовала. Где libicu есть — не трогаем: старая программа
+# с базой, созданной при ICU, без неё теряла бы ключи (порядок в индексах
+# LiteDB другой; с 1.0.40 база сама переходит на Ordinal)
+DOTNET_ENV=""
+have_icu() {
+    ldconfig -p 2>/dev/null | grep -q 'libicuuc\.so' && return 0
+    ls /usr/lib/libicuuc.so.* /usr/lib64/libicuuc.so.* /usr/lib/*/libicuuc.so.* /lib/*/libicuuc.so.* >/dev/null 2>&1
+}
+have_icu || DOTNET_ENV="DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_SYSTEM_GLOBALIZATION_PREDEFINED_CULTURES_ONLY=false"
 
 lan_ip() { hostname -I 2>/dev/null | awk '{print $1}'; }
 
@@ -212,9 +255,54 @@ migrate_old() {
     if valid_port "$oldport" && [ -z "$PORT" ]; then PORT="$oldport"; ASK=0; fi
 }
 
+# Каталог данных из ExecStart службы ($1 — файл юнита): пусто — не нашёлся
+unit_data() {
+    sed -n 's/^ExecStart=.*"[[:space:]][[:space:]]*[0-9][0-9]*[[:space:]][[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$1" 2>/dev/null | head -n 1
+}
+
+# systemctl --user от имени RUN_USER (под sudo — через его сессию systemd)
+user_sctl() {
+    if [ "$(id -un)" = "$RUN_USER" ]; then
+        systemctl --user "$@"
+    else
+        sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$RUN_USER")" systemctl --user "$@"
+    fi
+}
+
+# Пользовательская служба (до 1.0.40 ставилась по умолчанию) → системная в
+# /opt: тот же порт и данные. Здесь — только остановить и снять её юнит;
+# каталог программы удаляет migrate_user_cleanup, когда новая уже стоит:
+# скрипт и программа могут запускаться как раз оттуда
+MIGRATED_USER=0
+migrate_user() {
+    [ "$SYSTEM" = 1 ] && [ -f "$USER_UNIT_PATH" ] || return 0
+    local oldport olddata
+    oldport="$(cat "$USER_INSTALL_DIR/port" 2>/dev/null)"
+    olddata="$(unit_data "$USER_UNIT_PATH")"
+    echo "Найдена пользовательская служба $NAME ($USER_UNIT_PATH) — переношу в системную."
+    if ! user_sctl disable --now "$NAME" 2>/dev/null; then
+        # Нет сессии systemd пользователя — гасим процесс напрямую
+        $SUDO pkill -f "$USER_INSTALL_DIR/MonoServer" 2>/dev/null
+        sleep 1
+    fi
+    $SUDO rm -f "$USER_UNIT_PATH"
+    user_sctl daemon-reload 2>/dev/null
+    MIGRATED_USER=1
+    [ "$DATA_DEFAULT" = 1 ] && [ -n "$olddata" ] && DATA="$olddata"
+    if valid_port "$oldport" && [ -z "$PORT" ]; then PORT="$oldport"; ASK=0; fi
+}
+
+migrate_user_cleanup() {
+    [ "$MIGRATED_USER" = 1 ] || return 0
+    [ "$(readlink -f "$USER_INSTALL_DIR")" = "$(readlink -f "$INSTALL_DIR")" ] && return 0
+    $SUDO rm -rf "$USER_INSTALL_DIR"
+    echo "Пользовательская служба удалена ($USER_INSTALL_DIR), данные прежние: $DATA"
+}
+
 cmd_install() {
     command -v systemctl >/dev/null 2>&1 || die "Нет systemd (systemctl) — запустите в терминале: $0 run"
     migrate_old
+    migrate_user
     ensure_binary
     # Переустановка: остановить старую службу, чтобы её порт не считался занятым
     if service_exists; then
@@ -255,6 +343,7 @@ After=network-online.target
 [Service]
 Type=simple
 $unit_user
+$([ -n "$DOTNET_ENV" ] && echo "Environment=$DOTNET_ENV")
 ExecStart="$INSTALL_DIR/MonoServer" $PORT "$DATA"
 Restart=on-failure
 RestartSec=5
@@ -264,6 +353,7 @@ WantedBy=$wanted
 EOF
     SCTL daemon-reload || exit 1
     SCTL enable --now "$NAME" || die "Служба не запустилась — журнал: $0 log"
+    migrate_user_cleanup
 
     # Пользовательская служба без входа в систему стартует, только если включено «linger»
     if [ "$SYSTEM" = 0 ] && command -v loginctl >/dev/null 2>&1; then
@@ -283,8 +373,14 @@ EOF
         sleep 1
     done
     echo "Служба $NAME запущена и включена при загрузке: порт $PORT, данные $DATA"
+    echo "  программа: $INSTALL_DIR, служба: $UNIT_PATH"
     print_addresses "$PORT"
-    echo "  состояние: $INSTALL_DIR/monoserver.sh status$([ "$SYSTEM" = 1 ] && echo ' --system'), журнал: … log"
+    if [ "$SYSTEM" = 1 ]; then
+        echo "  состояние: systemctl status $NAME, журнал: journalctl -u $NAME -f"
+        echo "  обновить: $INSTALL_DIR/monoserver.sh update, код первого входа: $INSTALL_DIR/monoserver.sh code"
+    else
+        echo "  состояние: systemctl --user status $NAME, журнал: $INSTALL_DIR/monoserver.sh log --user"
+    fi
 }
 
 cmd_update() {
@@ -296,7 +392,7 @@ cmd_update() {
         cmd_install
         return
     fi
-    service_exists || die "Служба $NAME не установлена$([ "$SYSTEM" = 0 ] && echo ' (для системной — с --system)'). Поставить: $0 install"
+    service_exists || die "Служба $NAME не установлена. Поставить: $0 install"
     local p tmp before after
     p="$(cat "$CONF" 2>/dev/null)"
     before="$(curl -fs --max-time 2 "http://127.0.0.1:$p/echo" 2>/dev/null)"
@@ -315,10 +411,14 @@ cmd_update() {
     done
     echo "Обновлено: ${before:-?} → ${after:-не отвечает (журнал: $0 log)}"
     print_addresses "$p"
+    if [ "$SYSTEM" = 0 ] && [ ! -f "$SYSTEM_UNIT_PATH" ]; then
+        echo "Служба пользовательская ($INSTALL_DIR). Перенести в /opt/$NAME и /etc/systemd/system"
+        echo "(чтобы работало systemctl status $NAME), с тем же портом и данными: $INSTALL_DIR/monoserver.sh install"
+    fi
 }
 
 cmd_uninstall() {
-    service_exists || die "Служба $NAME не установлена$([ "$SYSTEM" = 0 ] && echo ' (для системной — с --system)')."
+    service_exists || die "Служба $NAME не установлена."
     SCTL disable --now "$NAME" 2>/dev/null
     $SUDO rm -f "$UNIT_PATH"
     SCTL daemon-reload
@@ -327,15 +427,17 @@ cmd_uninstall() {
 }
 
 cmd_status() {
-    service_exists || die "Служба $NAME не установлена$([ "$SYSTEM" = 0 ] && echo ' (для системной — с --system)')."
-    SCTL --no-pager status "$NAME" | head -n 5
+    service_exists || die "Служба $NAME не установлена."
+    # Смотреть состояние можно и без sudo
+    if [ "$SYSTEM" = 1 ]; then systemctl --no-pager status "$NAME" | head -n 5
+    else systemctl --user --no-pager status "$NAME" | head -n 5; fi
     local p; p="$(cat "$CONF" 2>/dev/null)"
     if [ -n "$p" ]; then
         if curl -fs --max-time 2 "http://127.0.0.1:$p/echo" >/dev/null 2>&1; then
             echo "Отвечает: $(curl -fs --max-time 2 "http://127.0.0.1:$p/echo")"
             print_addresses "$p"
         else
-            echo "На порту $p не отвечает — журнал: $0 log$([ "$SYSTEM" = 1 ] && echo ' --system')"
+            echo "На порту $p не отвечает — журнал: $0 log"
         fi
     fi
 }
@@ -347,9 +449,9 @@ cmd_log() { JCTL -f -n 100; }
 # из ExecStart установленной службы (её или системной), иначе по умолчанию
 cmd_code() {
     local data="" unit f p
-    for unit in "$UNIT_PATH" "/etc/systemd/system/$NAME.service" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$NAME.service"; do
+    for unit in "$UNIT_PATH" "$SYSTEM_UNIT_PATH" "$USER_UNIT_PATH"; do
         [ -f "$unit" ] || continue
-        data="$(sed -n 's/^ExecStart=.*"[[:space:]][[:space:]]*[0-9][0-9]*[[:space:]][[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$unit" | head -n 1)"
+        data="$(unit_data "$unit")"
         [ -n "$data" ] && break
     done
     [ -n "$data" ] || data="$DATA"
@@ -373,6 +475,8 @@ cmd_run() {
     echo "MonoServer: порт $PORT, данные $DATA"
     print_addresses "$PORT"
     echo "  остановить: Ctrl+C"
+    # shellcheck disable=SC2086 — несколько VAR=значение через env
+    if [ -n "$DOTNET_ENV" ]; then exec env $DOTNET_ENV "$SRC_BIN" "$PORT" "$DATA"; fi
     exec "$SRC_BIN" "$PORT" "$DATA"
 }
 

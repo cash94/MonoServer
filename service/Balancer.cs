@@ -31,11 +31,17 @@ namespace TorrStreamTorrServer
         public int FileId;
         public long Started;        // unix
         public long From, Sent;
+        // Запрос отдан до конца, поток ждёт продолжения до этого времени (часы StreamRegistry), 0 — идёт
+        public long LingerUntil;
     }
 
     public class StreamRegistry
     {
         public const long ViewerWindowMs = 60000;
+        // Сколько поток, отданный до конца запроса, ждёт следующего запроса того же
+        // зрителя к тому же файлу: плеер, читающий кусками (Range с концом), в «Потоках»
+        // виден одним потоком, а не мигает между запросами
+        public const long LingerMs = 15000;
 
         readonly object sync = new object();
         readonly Dictionary<long, StreamInfo> open = new Dictionary<long, StreamInfo>();
@@ -47,6 +53,18 @@ namespace TorrStreamTorrServer
         {
             lock (sync)
             {
+                Prune();
+                // Продолжение: тот же зритель, торрент и файл после запроса, отданного до конца
+                var prev = open.Values
+                    .Where(x => x.LingerUntil > 0 && x.Viewer == s.Viewer && x.Hash == s.Hash && x.FileId == s.FileId)
+                    .OrderByDescending(x => x.LingerUntil).FirstOrDefault();
+                if (prev != null)
+                {
+                    prev.LingerUntil = 0;
+                    prev.Who = s.Who; prev.Login = s.Login; prev.Remote = s.Remote; prev.Ip = s.Ip;
+                    lastSeen[s.Viewer] = clock.ElapsedMilliseconds;
+                    return prev;
+                }
                 s.Id = ++seq;
                 s.Started = Accounts.UnixNow();
                 open[s.Id] = s;
@@ -55,13 +73,23 @@ namespace TorrStreamTorrServer
             return s;
         }
 
-        public void End(StreamInfo s)
+        /// <summary>linger — запрос отдан до конца: поток ждёт продолжения LingerMs</summary>
+        public void End(StreamInfo s, bool linger = false)
         {
             lock (sync)
             {
-                open.Remove(s.Id);
-                lastSeen[s.Viewer] = clock.ElapsedMilliseconds;
+                long now = clock.ElapsedMilliseconds;
+                if (linger) s.LingerUntil = now + LingerMs;
+                else open.Remove(s.Id);
+                lastSeen[s.Viewer] = now;
             }
+        }
+
+        // Под sync: снять потоки, которых не продолжили за LingerMs
+        void Prune()
+        {
+            long now = clock.ElapsedMilliseconds;
+            foreach (var id in open.Values.Where(x => x.LingerUntil > 0 && now >= x.LingerUntil).Select(x => x.Id).ToList()) open.Remove(id);
         }
 
         void Expire()
@@ -76,6 +104,7 @@ namespace TorrStreamTorrServer
             lock (sync)
             {
                 Expire();
+                Prune();
                 var set = new HashSet<string>(lastSeen.Keys, StringComparer.Ordinal);
                 foreach (var s in open.Values) set.Add(s.Viewer);
                 return set.Count;
@@ -87,6 +116,7 @@ namespace TorrStreamTorrServer
             lock (sync)
             {
                 Expire();
+                Prune();
                 return lastSeen.ContainsKey(viewer) || open.Values.Any(s => s.Viewer == viewer);
             }
         }
@@ -94,12 +124,12 @@ namespace TorrStreamTorrServer
         /// <summary>Торрент сейчас читает кто-то, кроме viewer</summary>
         public bool OthersOn(string hash, string viewer)
         {
-            lock (sync) return open.Values.Any(s => s.Hash == hash && s.Viewer != viewer);
+            lock (sync) { Prune(); return open.Values.Any(s => s.Hash == hash && s.Viewer != viewer); }
         }
 
         public List<StreamInfo> Snapshot()
         {
-            lock (sync) return open.Values.OrderBy(s => s.Id).ToList();
+            lock (sync) { Prune(); return open.Values.OrderBy(s => s.Id).ToList(); }
         }
     }
 

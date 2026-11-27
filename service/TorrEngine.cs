@@ -187,11 +187,16 @@ namespace TorrStreamTorrServer
         // Для замера ожидания: когда открыт, ждал ли данных, отдал ли уже байт
         public long OpenedMs;
         public bool Waited, GotByte;
+        // «Послесвечение»: HTTP-запрос с Range отдан до конца, а читатель ещё
+        // держит окно с места, где запрос кончился, — до этого времени (Now()).
+        // 0 — читает. Плеер, читающий кусками (WASM-плеер TorrStream), между
+        // запросами не теряет ни читателя, ни приоритета кусков впереди
+        public long LingerUntilMs;
     }
 
     public class TorrEngine
     {
-        public const string ServiceVersion = "1.0.38";
+        public const string ServiceVersion = "1.0.39";
         // Клиенты (Lampa и др.) по «MatriX» в /echo узнают API TorrServer MatriX
         public const string EchoVersion = "MatriX.136 (MonoServer " + ServiceVersion + ")";
 
@@ -1514,6 +1519,7 @@ namespace TorrStreamTorrServer
             {
                 foreach (var e in entries.Values)
                 {
+                    if (e.Readers.Count > 0) ExpireLingering(e, now);
                     if (e.Manager != null && e.Manager.HasMetadata && now - e.OpenedMs >= SavedPeers.SnapshotMs && now - e.Diag.LastPeerSnapshotMs >= SavedPeers.SnapshotMs)
                     {
                         e.Diag.LastPeerSnapshotMs = now;
@@ -1715,6 +1721,14 @@ namespace TorrStreamTorrServer
                     }
             lock (sync)
             {
+                // Следующий запрос того же файла продолжает за призраком — призрак больше не нужен.
+                // Предзагрузка призрака плеера не заменяет
+                if (!preload) e.Readers.RemoveAll(x =>
+                {
+                    if (x.LingerUntilMs == 0 || x.Stat.Id != f.Id) return false;
+                    x.Closed = true;
+                    return true;
+                });
                 e.Readers.Add(r);
                 e.LastActiveMs = Now();
                 UpdateProtect(e);
@@ -1722,14 +1736,47 @@ namespace TorrStreamTorrServer
             return r;
         }
 
-        public void CloseReader(TorrReader r)
+        /// <summary>Сколько живёт читатель после запроса, отданного до конца (TorrReader.LingerUntilMs)</summary>
+        public const int ReaderLingerMs = 15000;
+
+        /// <summary>lingerMs &gt; 0 — не убирать сразу: окно держится до следующего читателя
+        /// того же файла или до срока (снимает CloseIdle)</summary>
+        public void CloseReader(TorrReader r, int lingerMs = 0)
         {
-            r.Closed = true;
             var e = r.Entry;
+            if (lingerMs > 0 && !r.Closed)
+            {
+                lock (sync)
+                {
+                    if (e.Readers.Contains(r))
+                    {
+                        r.LingerUntilMs = Now() + lingerMs;
+                        e.LastActiveMs = Now();
+                        UpdateProtect(e);
+                        return;
+                    }
+                }
+            }
+            r.Closed = true;
             lock (sync)
             {
                 e.Readers.Remove(r);
                 e.LastActiveMs = Now();
+                UpdateProtect(e);
+            }
+        }
+
+        // Под sync: снять призраков, чей срок вышел
+        void ExpireLingering(TorrEntry e, long now)
+        {
+            if (e.Readers.RemoveAll(x =>
+            {
+                if (x.LingerUntilMs == 0 || now < x.LingerUntilMs) return false;
+                x.Closed = true;
+                return true;
+            }) > 0)
+            {
+                e.LastActiveMs = now;
                 UpdateProtect(e);
             }
         }
@@ -1784,11 +1831,12 @@ namespace TorrStreamTorrServer
         /// Главный читатель: последний открытый, но не предзагрузка, пока есть
         /// другие. Иначе прогрев следующей серии за 3 минуты до конца текущей
         /// (TorrStream) забирал окно: плееру оставалось 2 куска, а в памяти —
-        /// окно плеера и окно прогрева разом
+        /// окно плеера и окно прогрева разом. Призрак (LingerUntilMs) — плеер
+        /// между запросами: уступает читающим, но не предзагрузке
         /// </summary>
         static TorrReader PrimaryOf(List<TorrReader> live)
         {
-            return live.OrderBy(r => r.Preload ? 1 : 0).ThenByDescending(r => r.Seq).FirstOrDefault();
+            return live.OrderBy(r => r.Preload ? 2 : r.LingerUntilMs != 0 ? 1 : 0).ThenByDescending(r => r.Seq).FirstOrDefault();
         }
 
         void UpdateProtect(TorrEntry e)
@@ -2064,7 +2112,9 @@ namespace TorrStreamTorrServer
             {
                 if (e.PreloadStop != stopGen) return "системе не хватает памяти";
                 foreach (var r in e.Readers)
-                    if (!r.Preload && !r.Closed && ReferenceEquals(r.Stat.File, f.File) && now - r.OpenedMs >= PreloadYieldMs)
+                    // Призрак (LingerUntilMs) — запрос уже кончился: короткий запрос службы дорожек
+                    // оставляет его на 15 с, и он не должен останавливать прогрев
+                    if (!r.Preload && !r.Closed && r.LingerUntilMs == 0 && ReferenceEquals(r.Stat.File, f.File) && now - r.OpenedMs >= PreloadYieldMs)
                         return "файл уже смотрят";
             }
             return null;

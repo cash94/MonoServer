@@ -1114,7 +1114,7 @@ namespace TorrStreamTorrServer
             });
             // В журнал — кто и откуда читает: по нему видно, чего ждёт плеер
             var started = System.Diagnostics.Stopwatch.StartNew();
-            long sent = 0, counted = 0;
+            long sent = 0, counted = 0, sentBefore = info.Sent;   // поток продолжен (StreamRegistry.LingerMs) — уже отдано
             string how = "прервано";
             log(e.Hash + ": файл " + f.Id + " с " + Mb(start) + (partial ? " (Range " + range + ")" : "") + ", " + c.Ip + (c.User != null || c.Remote != null ? " (" + c.Who + ")" : ""));
             try
@@ -1136,7 +1136,7 @@ namespace TorrStreamTorrServer
                     s.Write(buf, 0, n);
                     left -= n;
                     sent += n;
-                    info.Sent = sent;
+                    info.Sent = sentBefore + sent;
                     // Трафик — порциями: в статистике виден и идущий просмотр
                     if (sent - counted >= 4 << 20) { accounts.AddHttp(c.Login, c.Remote, sent - counted); counted = sent; }
                 }
@@ -1145,8 +1145,11 @@ namespace TorrStreamTorrServer
             }
             finally
             {
-                engine.CloseReader(reader);
-                Streams.End(info);
+                // Отдан до конца — плеер читает кусками (Range с концом) и сейчас попросит
+                // следующий: читатель и поток ещё держатся, окно впереди не сбрасывается
+                bool done = how == "до конца запроса";
+                engine.CloseReader(reader, done ? TorrEngine.ReaderLingerMs : 0);
+                Streams.End(info, done);
                 accounts.AddHttp(c.Login, c.Remote, sent - counted);
                 log(e.Hash + ": файл " + f.Id + " — " + how + ": отдано " + Mb(sent) + " за " + (started.ElapsedMilliseconds / 1000.0).ToString("0.0") + " с, позиция " + Mb(start + sent));
             }
